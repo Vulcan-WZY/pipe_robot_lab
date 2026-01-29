@@ -15,13 +15,18 @@ from pipe_robot_reward import RewardsCfg
 from pipe_robot_events import EventCfg, TerminationsCfg
 # 用于挂载相机与IMU
 from isaaclab.sensors import TiledCameraCfg , ImuCfg
-
+import os
 # =============================================================================
 # 1. 机器人资产配置 (Robot Asset Configuration)
 # =============================================================================
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# USD_PATH = os.path.join(CURRENT_DIR, "../source/model/pipe_robot/USD/pipe_robot_rename/pipe_robot_rename.usd")
+USD_PATH = os.path.join(CURRENT_DIR, "../source/pipe_robot_lab/pipe_robot_lab/assets/pipe_robot/usd/pipe_robot_rename.usd")
+    
 PIPE_ROBOT_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="/home/vulcan/Academic/pipe_robot_lab/source/model/pipe_robot/USD/pipe_robot_rename/pipe_robot_rename.usd",
+        usd_path=USD_PATH,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,
