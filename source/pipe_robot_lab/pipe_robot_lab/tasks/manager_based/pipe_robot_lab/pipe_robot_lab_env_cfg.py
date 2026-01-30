@@ -36,7 +36,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
     )
     # 管道障碍物 (静态)
     pipe_obstacle01 = AssetBaseCfg(
-        prim_path="/World/PipeObstacle1",
+        prim_path="{ENV_REGEX_NS}/PipeObstacle1",
         spawn=sim_utils.CylinderCfg(
             radius=0.18,        # 直径 360mm
             height=2.0,         # 长度 2m
@@ -55,7 +55,8 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         ),
     )
     pipe_obstacle02 = AssetBaseCfg(
-        prim_path="/World/PipeObstacle2",
+        prim_path="{ENV_REGEX_NS}/PipeObstacle2",
+        # spawn= si
         spawn=sim_utils.CylinderCfg(
             radius=0.18,        # 直径 360mm
             height=2.0,         # 长度 2m
@@ -122,7 +123,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs=1, env_spacing=4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs=2, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

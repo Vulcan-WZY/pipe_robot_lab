@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Pipe-Robot-Lab-v0",
+    id="Template-Pipe-Robot-Lab-v1",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
