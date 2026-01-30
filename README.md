@@ -13,19 +13,27 @@
 
 - 启动Demo程序并打开相机：`python ./06_pipe_ctrl.py --enable_cameras`
 
+# 仓库部署流程
+
+## 安装IsaacLab环境
+
+1. 创建conda环境: conda create -n isaaclab python=3.11 -y
+2. 激活刚刚创建的isaaclab环境: conda activate isaaclab
+3. 更新环境中的pip: pip install --upgrade pip
+4. 安装对应版本的pytorch: `pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128`
+5. 通过pip安装IsaacSim: `pip install --upgrade "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com`
+6. clone仓库: `git clone https://github.com/isaac-sim/IsaacLab.git`
+7. 在conda环境+IsaacLab仓库目录下, 自动安装IsaacLab全部扩展: ./isaaclab.sh --install
+8. 激活环境验证安装: python scripts/tutorials/02_scene/create_scene.py
+
+## 安装功能包
+
+```bash
+# use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+python -m pip install -e source/pipe_robot_lab
+```
+
 # Template for Isaac Lab Projects
-
-## Overview
-
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
-
-**Key Features:**
-
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
-
-**Keywords:** extension, template, isaaclab
 
 ## Installation
 

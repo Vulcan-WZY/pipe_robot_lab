@@ -1,17 +1,12 @@
 import torch
 import math
 from dataclasses import MISSING
-import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import ActionTermCfg as ActionTerm
-from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.envs import ManagerBasedRLEnv
 import isaaclab.envs.mdp as mdp
 
 # =============================================================================
-# 自定义动作项 (Custom Actions)
+# * 自定义动作项 (Custom Actions)
 # =============================================================================
 
 # 定义一些常量
@@ -63,7 +58,7 @@ class LinkedArmAction(mdp.JointPositionAction):
             print(f"  Pair {i:02d}: {m:<30} --> {t}")
         
         if len(mid_names) != len(tail_names):
-             print(f"[WARNING] LinkedArmAction: Mismatch in number of joints! Mid: {len(mid_names)}, Tail: {len(tail_names)}")
+                print(f"[WARNING] LinkedArmAction: Mismatch in number of joints! Mid: {len(mid_names)}, Tail: {len(tail_names)}")
     def apply_actions(self):
         # 1. 应用 mid_arm (基类逻辑)
         # process_actions 已经在 step 前被调用，self.processed_actions 包含 mid_arm 的目标位置
@@ -226,9 +221,11 @@ class SteerWheelAction(mdp.JointVelocityAction):
         # 6. 下发指令
         self._asset.set_joint_velocity_target(final_speed, joint_ids=self._joint_ids)
         self._asset.set_joint_position_target(final_angle_cmd, joint_ids=self.steer_joint_idxs)
+
 # =============================================================================
-# 3. 动作配置 (Actions Configuration)
+# * MDP Action 注册
 # =============================================================================
+
 @configclass
 class ActionsCfg:
     # -------------------------------------------------------------------------

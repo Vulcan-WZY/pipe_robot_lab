@@ -1,7 +1,6 @@
 from isaaclab.utils import configclass
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import ActionTermCfg as ActionTerm
 import isaaclab.envs.mdp as mdp
 # =============================================================================
 # 4. 观测配置 (Observations Configuration)

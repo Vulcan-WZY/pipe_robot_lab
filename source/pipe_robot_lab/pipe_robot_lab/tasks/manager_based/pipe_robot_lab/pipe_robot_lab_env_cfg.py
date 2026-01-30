@@ -2,163 +2,127 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
-import math
-
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import EventTermCfg as EventTerm
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import RewardTermCfg as RewTerm
-from isaaclab.managers import SceneEntityCfg
-from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
-
-from . import mdp
+from isaaclab.sensors import TiledCameraCfg , ImuCfg
 
 ##
 # Pre-defined configs
 ##
-
-from isaaclab_assets.robots.cartpole import CARTPOLE_CFG  # isort:skip
-
+from pipe_robot_lab.assets.pipe_robot.pipe_robot_cfg import PIPE_ROBOT_CFG  # isort:skip
+from .mdp.actions import ActionsCfg  
+from .mdp.observations import ObservationsCfg
+from .mdp.rewards import RewardsCfg
+from .mdp.events import EventCfg
+from .mdp.terminations import TerminationsCfg
 
 ##
 # Scene definition
 ##
-
-
 @configclass
-class PipeRobotLabSceneCfg(InteractiveSceneCfg):
-    """Configuration for a cart-pole scene."""
-
-    # ground plane
+class PipeRobotSceneCfg(InteractiveSceneCfg):
+    # 地面
     ground = AssetBaseCfg(
-        prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+        prim_path="/World/defaultGroundPlane", 
+        spawn=sim_utils.GroundPlaneCfg()
     )
-
-    # robot
-    robot: ArticulationCfg = CARTPOLE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-
-    # lights
-    dome_light = AssetBaseCfg(
-        prim_path="/World/DomeLight",
-        spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
+    # 光照
+    light = AssetBaseCfg(
+        prim_path="/World/lightDistant", 
+        spawn=sim_utils.DistantLightCfg(intensity=5000.0)
     )
-
-
-##
-# MDP settings
-##
-
-
-@configclass
-class ActionsCfg:
-    """Action specifications for the MDP."""
-
-    joint_effort = mdp.JointEffortActionCfg(asset_name="robot", joint_names=["slider_to_cart"], scale=100.0)
-
-
-@configclass
-class ObservationsCfg:
-    """Observation specifications for the MDP."""
-
-    @configclass
-    class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
-
-        # observation terms (order preserved)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
-
-        def __post_init__(self) -> None:
-            self.enable_corruption = False
-            self.concatenate_terms = True
-
-    # observation groups
-    policy: PolicyCfg = PolicyCfg()
-
-
-@configclass
-class EventCfg:
-    """Configuration for events."""
-
-    # reset
-    reset_cart_position = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["slider_to_cart"]),
-            "position_range": (-1.0, 1.0),
-            "velocity_range": (-0.5, 0.5),
-        },
+    # 管道障碍物 (静态)
+    pipe_obstacle01 = AssetBaseCfg(
+        prim_path="/World/PipeObstacle1",
+        spawn=sim_utils.CylinderCfg(
+            radius=0.18,        # 直径 360mm
+            height=2.0,         # 长度 2m
+            rigid_props=None,   # 静态 (Static)
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            # 配置高摩擦力材质
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0,   # 静摩擦系数
+                dynamic_friction=1.0,  # 动摩擦系数
+                restitution=0.0,       # 恢复系数(0表示不反弹)
+            ),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5), # 中心位置
+            rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+        ),
     )
-
-    reset_pole_position = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["cart_to_pole"]),
-            "position_range": (-0.25 * math.pi, 0.25 * math.pi),
-            "velocity_range": (-0.25 * math.pi, 0.25 * math.pi),
-        },
+    pipe_obstacle02 = AssetBaseCfg(
+        prim_path="/World/PipeObstacle2",
+        spawn=sim_utils.CylinderCfg(
+            radius=0.18,        # 直径 360mm
+            height=2.0,         # 长度 2m
+            rigid_props=None,   # 静态 (Static)
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            # 配置高摩擦力材质
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0,   # 静摩擦系数
+                dynamic_friction=1.0,  # 动摩擦系数
+                restitution=0.0,       # 恢复系数(0表示不反弹)
+            ),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 1.0, 1.5), # 中心位置
+            rot=(1, 0.0, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+        ),
     )
-
-
-@configclass
-class RewardsCfg:
-    """Reward terms for the MDP."""
-
-    # (1) Constant running reward
-    alive = RewTerm(func=mdp.is_alive, weight=1.0)
-    # (2) Failure penalty
-    terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
-    # (3) Primary task: keep pole upright
-    pole_pos = RewTerm(
-        func=mdp.joint_pos_target_l2,
-        weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["cart_to_pole"]), "target": 0.0},
+    # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
+    robot: ArticulationCfg = PIPE_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    
+    back_cam = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/BM_02_link_cam/cam_back",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        update_period=0.1,  # 10Hz
+        height=240,
+        width=320,
+        data_types=["depth"],  # Intel D435i 深度流
+        debug_vis=True,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
+            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
+            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
+            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+        ),
     )
-    # (4) Shaping tasks: lower cart velocity
-    cart_vel = RewTerm(
-        func=mdp.joint_vel_l1,
-        weight=-0.01,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["slider_to_cart"])},
+    front_cam = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FM_25_link_cam/cam_front",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        update_period=0.1,  # 10Hz
+        height=240,
+        width=320,
+        data_types=["depth"],  # Intel D435i 深度流
+        debug_vis=True,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
+            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
+            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
+            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+        ),
     )
-    # (5) Shaping tasks: lower pole angular velocity
-    pole_vel = RewTerm(
-        func=mdp.joint_vel_l1,
-        weight=-0.005,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["cart_to_pole"])},
+    back_imu = ImuCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/BM_03_link_imu",
+        update_period=0.005,           # 200Hz
     )
-
-
-@configclass
-class TerminationsCfg:
-    """Termination terms for the MDP."""
-
-    # (1) Time out
-    time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    # (2) Cart out of bounds
-    cart_out_of_bounds = DoneTerm(
-        func=mdp.joint_pos_out_of_manual_limit,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["slider_to_cart"]), "bounds": (-3.0, 3.0)},
+    front_imu = ImuCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FM_26_link_imu",
+        update_period=0.005,           # 200Hz
     )
-
 
 ##
 # Environment configuration
 ##
 
-
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotLabSceneCfg = PipeRobotLabSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs=1, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

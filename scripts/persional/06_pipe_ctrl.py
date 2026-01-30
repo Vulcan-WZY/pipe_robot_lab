@@ -19,7 +19,8 @@ import carb.input
 import omni.appwindow # 新增导入
 import math
 from isaaclab.envs import ManagerBasedRLEnv
-from pipe_robot_env import PipeRobotEnvCfg
+# from pipe_robot_env import PipeRobotEnvCfg
+from pipe_robot_lab.tasks.manager_based.pipe_robot_lab.pipe_robot_lab_env_cfg import PipeRobotLabEnvCfg
 
 
 class PiprRobotDemo:
@@ -295,10 +296,9 @@ class PiprRobotDemo:
 
 def main():
     # 1. 实例化配置
-    env_cfg = PipeRobotEnvCfg()
+    env_cfg = PipeRobotLabEnvCfg()
     # 2. 创建环境
     env = ManagerBasedRLEnv(cfg=env_cfg)
-    
     # 3. 启动交互 Demo
     demo = PiprRobotDemo(env)
     demo.run()

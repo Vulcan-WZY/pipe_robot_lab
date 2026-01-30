@@ -5,6 +5,19 @@
         "/home/vulcan/Isaac/IsaacLab/source/isaaclab_mimic",
         "/home/vulcan/Isaac/IsaacLab/source/isaaclab",
         "/home/vulcan/Isaac/IsaacLab/source/isaaclab_assets",
-        "/home/vulcan/Isaac/IsaacLab/source/isaaclab_rl"
+        "/home/vulcan/Isaac/IsaacLab/source/isaaclab_rl",
+        "./source/pipe_robot_lab"
+    ],
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/*.egg-info": true,
+        "**/build": true,
+        "**/dist": true,
+        "**/model": true,
+        "**/docs": true,
+    },
+    "python.autoComplete.extraPaths": [
+        "./source/pipe_robot_lab"
     ]
 }

@@ -15,8 +15,5 @@ class EventCfg:
             "velocity_range": (0.0, 0.0),
         },
     )
-
-@configclass
-class TerminationsCfg:
-    """空终止配置 (Demo用途: 不自动重置)"""
-    pass
+    
+    
