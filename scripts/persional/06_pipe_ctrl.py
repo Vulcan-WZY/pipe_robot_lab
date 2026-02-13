@@ -247,9 +247,6 @@ class PiprRobotDemo:
             self.needs_reset = False
             print("[INFO] Environment Reset Triggered.")
 
-        front_cam = self.env.scene["front_cam"]
-        back_cam = self.env.scene["back_cam"]
-        
         count = 0
         while simulation_app.is_running():
             actions_list = []
@@ -266,8 +263,6 @@ class PiprRobotDemo:
             #             f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
             #             f"Bend2: {self.cmd_pos['bend_02']:.2f}")
             
-
-
             for term_name in self.term_names:
                 term = action_mgr.get_term(term_name)
                 dim = term.action_dim 
@@ -289,6 +284,10 @@ class PiprRobotDemo:
             full_action = torch.cat(actions_list, dim=1)
             obs, _, terminated, truncated, _ = self.env.step(full_action)
             
+            count += 1
+            if count % 100 == 0:
+                obs_mgr = self.env.observation_manager
+                
             if terminated.any() or truncated.any():
                 obs, _ = self.env.reset()
 
