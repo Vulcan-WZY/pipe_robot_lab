@@ -35,6 +35,22 @@ def get_depth_image(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, normaliz
     
     return depth_data.clone() # 返回这部分数据的拷贝
 
+def get_imu_orientation(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Read IMU orientation (quat_w) from sensor."""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    return sensor.data.quat_w.view(env.num_envs, -1)
+
+def get_imu_ang_vel(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Read IMU angular velocity (ang_vel_b) from sensor."""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    return sensor.data.ang_vel_b.view(env.num_envs, -1)
+
+def get_imu_lin_acc(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Read IMU linear acceleration (lin_acc_b) from sensor."""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    return sensor.data.lin_acc_b.view(env.num_envs, -1)
+
+
 # =============================================================================
 # 4. 观测配置 (Observations Configuration)
 # =============================================================================
@@ -42,10 +58,10 @@ def get_depth_image(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, normaliz
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
-        # todo 数值空间观测
+        # # todo 数值空间观测
         # 观测所有主动轮和辅助轮的舵角方向
         steer_pos = ObsTerm(
-            func = mdp.joint_pos_limit_normalized, # 关节归一化位置
+            func = mdp.joint_pos, # 关节归一化位置
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*main_steer_.*", ".*assist_steer_.*"]
@@ -54,16 +70,16 @@ class ObservationsCfg:
         )
         # 观测所有主动轮和辅助轮的轮速
         wheel_vel = ObsTerm(
-            func= mdp.joint_vel_rel, # 先使用真实速度
+            func= mdp.joint_vel, # 先使用真实速度
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*main_steer_.*", ".*assist_steer_.*"]
                 )            
             }
         )
-        # 观测变形推杆位置
+        # # 观测变形推杆位置
         bend_pos = ObsTerm(
-            func = mdp.joint_pos_limit_normalized, # 关节归一化位置
+            func = mdp.joint_pos, # 关节位置
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*bend_.*"]
@@ -88,57 +104,50 @@ class ObservationsCfg:
                 )            
             }
         )
-        # todo IMU四元数姿态
+        # # todo IMU四元数姿态
         imu_back_quat = ObsTerm(
-            func = mdp.imu_orientation,
+            func = get_imu_orientation,
             params = {
-                "asset_cfg": SceneEntityCfg("robot",
-                    body_names =["BM_03_link_imu"]
-                )
+                "sensor_cfg": SceneEntityCfg("back_imu")
             }
         )
         imu_front_quat = ObsTerm(
-            func = mdp.imu_orientation,
+            func = get_imu_orientation,
             params = {
-                "asset_cfg": SceneEntityCfg("robot",
-                    body_names =["FM_26_link_imu"]
-                )
+                "sensor_cfg": SceneEntityCfg("front_imu")
             }
         )
-        # todo IMU线加速度
+        # # todo IMU线加速度
         imu_back_accel = ObsTerm(
-            func = mdp.imu_lin_acc,
+            func = get_imu_lin_acc,
             params = {
-                "asset_cfg": SceneEntityCfg("robot",
-                    body_names =["BM_03_link_imu"]
-                )
+                "sensor_cfg": SceneEntityCfg("back_imu")
             }
         )
         imu_front_accel = ObsTerm(
-            func = mdp.imu_lin_acc,
+            func = get_imu_lin_acc,
             params = {
-                "asset_cfg": SceneEntityCfg("robot",
-                    body_names =["FM_26_link_imu"]
-                )
+                "sensor_cfg": SceneEntityCfg("front_imu")
             }
         )
         
-        # * 重力投影
+        # # * 重力投影
         projected_gravity = ObsTerm(
             func = mdp.projected_gravity,
             params={"asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])}
         )
         
-        # todo 上一帧动作
-        last_action = ObsTerm(
-            func = mdp.last_action,
-        )
+        # # todo 上一帧动作
+        # last_action = ObsTerm(
+        #     func = mdp.last_action,
+        # )
         
         def __post_init__(self):
             # 计算观测维度
             # 拼接观测
-            self.concatenate_dim = True  # 将所有观测拼接成一个大向量
-            self.enable_corruption = True # 启用观测扰动（如噪声）以增强鲁棒性
+            # self.concatenate_dim = True  # 将所有观测拼接成一个大向量
+            self.enable_corruption = True # 启用观测扰动（如噪声）以增强鲁棒性 
+            self.concatenate_terms = True
         
     @configclass
     class CameraCfg(ObsGroup):
@@ -198,3 +207,4 @@ class ObservationsCfg:
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
     critic = CriticCfg()
+    

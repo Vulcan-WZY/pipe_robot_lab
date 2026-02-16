@@ -254,16 +254,16 @@ class PiprRobotDemo:
             actions_list = []
             
             # # * --- Debug: Print cmd_vel periodically to ensure input is received ---
-            count += 1
-            if count % 50 == 0:
-                # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
-                print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
-                        f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
-                        f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
-                        f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
-                        f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
-                        f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
-                        f"Bend2: {self.cmd_pos['bend_02']:.2f}")
+            # count += 1
+            # if count % 50 == 0:
+            #     # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
+            #     print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
+            #             f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
+            #             f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
+            #             f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
+            #             f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
+            #             f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
+            #             f"Bend2: {self.cmd_pos['bend_02']:.2f}")
             
             for term_name in self.term_names:
                 term = action_mgr.get_term(term_name)
@@ -287,88 +287,27 @@ class PiprRobotDemo:
             obs, _, terminated, truncated, _ = self.env.step(full_action)
 
             
-            # count += 1
+            count += 1
             if count % 50 == 0:
                 print(f"[Frame {count}] Observation Debug:")
                 
                 # ---------------------------------------------------------
-                # ! 1. 检查 Policy 组 (Tensor) - 智能切片打印
+                # 1. 检查 Policy 组 (Tensor)
                 # ---------------------------------------------------------
                 policy_obs = obs.get("policy")
                 if isinstance(policy_obs, torch.Tensor):
                     shape_info = tuple(policy_obs.shape)
+                    # 打印前 6 个数值 (假设是前两个关节的位置/速度)
+                    samples = policy_obs[0, :6].cpu().numpy()
                     print(f"  > [Policy] Tensor Shape: {shape_info}")
-                    
-                    # 使用 Observation Manager 的元数据来反解每个 term 的含义
-                    obs_mgr = self.env.observation_manager
-                    try:
-                        # 尝试获取 group_obs_term_names
-                        if hasattr(obs_mgr, "group_obs_term_names"):
-                            term_names_list = obs_mgr.group_obs_term_names.get("policy", [])
-                        elif hasattr(obs_mgr, "_group_obs_term_names"): # 可能是私有属性
-                            term_names_list = obs_mgr._group_obs_term_names.get("policy", [])
-                        else:
-                            # 如果都不存在，尝试通过 group_obs_dim 的 key 获取 (不保证顺序完全正确，但通常是有序字典)
-                            # 或者尝试从 cfg 中获取
-                            term_names_list = []
-                            # 这是一个 fallback
-                            
-                        # 尝试获取 group_obs_dim
-                        # 注意：如果 group_obs_dim 返回的是合并后的总维度 (len=1)，我们需要去找分项维度
-                        # 通常存储在 `_group_obs_term_dim` 中
-                        if hasattr(obs_mgr, "_group_obs_term_dim"):
-                            term_dims_list = obs_mgr._group_obs_term_dim.get("policy", [])
-                        elif hasattr(obs_mgr, "group_obs_term_dim"):
-                            term_dims_list = obs_mgr.group_obs_term_dim.get("policy", [])
-                        else:
-                            # fallback: 如果都没有，尝试用 group_obs_dim (但可能 merge 过了)
-                            if hasattr(obs_mgr, "group_obs_dim"):
-                                term_dims_list = obs_mgr.group_obs_dim.get(
-                                    "policy", [])
-                            else:
-                                term_dims_list = []
-
-                        current_idx = 0
-
-                        # 如果确实拿不到 names，不仅打印 raw，还可以尝试只打印 dim
-                        if not term_names_list and term_dims_list:
-                            print(
-                                f"    [Info] Names not found, printing by index chunks based on dims.")
-                            term_names_list = [
-                                f"Term_{i}" for i in range(len(term_dims_list))]
-                        
-                        # 确保列表长度一致
-                        if len(term_names_list) != len(term_dims_list):
-                            print(f"    [Warning] Names/Dims mismatch: {len(term_names_list)} vs {len(term_dims_list)}")
-                            
-                        for name, dims in zip(term_names_list, term_dims_list):
-                            # dims 此时通常是元组，例如 (12,)
-                            # 计算这一项展平后的总长度
-                            length = int(np.prod(dims))
-                            
-                            end_idx = current_idx + length
-                            
-                            # 获取第 0 个环境的数据切片
-                            if end_idx <= policy_obs.shape[1]:
-                                val = policy_obs[0, current_idx:end_idx].cpu().numpy()
-                                # 美化打印
-                                print(f"    - {name:<18} [{length:2d}]: {np.array2string(val, precision=3, suppress_small=True)}")
-                            else:
-                                print(f"    - {name:<18}: [Index Error] {current_idx}:{end_idx} vs {policy_obs.shape[1]}")
-                            
-                            current_idx = end_idx
-                    except Exception as e:
-                        print(f"    [Smart Print Failed]: {e}")
-                        # 打印可用属性以便调试
-                        print(f"    Available attributes: {[k for k in dir(obs_mgr) if 'group' in k or 'term' in k or 'dim' in k]}")
-
+                    print(f"    Sample values: {samples}")
                 elif policy_obs is None:
                     print("  > [Policy] Key not found in obs.")
                 else:
                     print(f"  > [Policy] Unexpected type: {type(policy_obs)}")
 
                 # ---------------------------------------------------------
-                # ! 2. 检查 Critic 组 (Tensor)
+                # 2. 检查 Critic 组 (Tensor)
                 # ---------------------------------------------------------
                 critic_obs = obs.get("critic")
                 if isinstance(critic_obs, torch.Tensor):
@@ -376,7 +315,7 @@ class PiprRobotDemo:
                     print(f"  > [Critic] Tensor Shape: {shape_info}")
 
                 # ---------------------------------------------------------
-                # ! 3. 检查 Camera 组 (Dict)
+                # 3. 检查 Camera 组 (Dict)
                 # ---------------------------------------------------------
                 camera_obs = obs.get("camera")
                 if isinstance(camera_obs, dict):
@@ -384,6 +323,31 @@ class PiprRobotDemo:
                     for key, val in camera_obs.items():
                         if isinstance(val, torch.Tensor):
                             print(f"    - {key}: {tuple(val.shape)}")
+
+                            # 每 1000 帧保存一次图片
+                            if count % 1000 == 0:
+                                # val shape: [num_envs, 1, height, width]
+                                # 取第一个环境的图像
+                                img_tensor = val[0, 0]  # shape: [height, width]
+                                
+                                # 转换到 CPU numpy
+                                img_np = img_tensor.cpu().numpy()
+                                
+                                # 将深度值归一化到 0-255 以便可视化 (假设深度范围 0-1 或其他)
+                                # 注意：你的 get_depth_image 函数可能已经归一化了，这里做一个简单的拉伸以便观察
+                                # 为了通用性，先归一化到 0-1
+                                img_min, img_max = img_np.min(), img_np.max()
+                                if img_max > img_min:
+                                    img_norm = (img_np - img_min) / (img_max - img_min)
+                                else:
+                                    img_norm = img_np
+                                
+                                img_save = (img_norm * 255).astype(np.uint8)
+                                
+                                # 保存图片
+                                filename = f"{key}_frame_{count}.png"
+                                cv2.imwrite(filename, img_save)
+                                print(f"    [Saved] {filename}")
             
             if terminated.any() or truncated.any():
                 obs, _ = self.env.reset()

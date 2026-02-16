@@ -19,5 +19,6 @@
     },
     "python.autoComplete.extraPaths": [
         "./source/pipe_robot_lab"
-    ]
+    ],
+    "commentTranslate.source": "renping.deepseek-comment-translate-deepseek"
 }
