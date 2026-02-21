@@ -20,5 +20,8 @@
     "python.autoComplete.extraPaths": [
         "./source/pipe_robot_lab"
     ],
-    "commentTranslate.source": "renping.deepseek-comment-translate-deepseek"
+    "commentTranslate.source": "renping.deepseek-comment-translate-deepseek",
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python-envs.pythonProjects": []
 }
