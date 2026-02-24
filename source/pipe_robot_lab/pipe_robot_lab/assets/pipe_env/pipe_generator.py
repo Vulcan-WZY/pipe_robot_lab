@@ -7,7 +7,15 @@ import yaml
 # from isaaclab.assets import AssetBaseCfg
 from dataclasses import dataclass
 from typing import List, Tuple
-import pickle # 用于保存生成的管道参数以及其次变换矩阵
+import json # 用于保存生成的管道参数以及其次变换矩阵
+from pathlib import Path
+
+# ==========================================
+# 全局配置开关
+# ==========================================
+ENABLE_VISUALIZATION = True  # 是否在生成时实时显示 3D 网格
+VISUALIZATION_PAUSE_TIME = 1.0  # 每个网格显示的停留时间（秒）
+# ==========================================
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 YAML_PATH = os.path.join(CURRENT_DIR, "config" , "pipe_env.yaml")
@@ -18,6 +26,9 @@ class GeneratorCfg:
     mode: str = "random"  # "random" or "fixed"
     fixed_info: List[List[float]] = None 
     second_mode: str = "safe"  # "random" or "safe"
+    total_nums: int = 20
+    meshes_path: str = "./meshes"
+    json_path: str = "./json"
 
 @dataclass
 class GeometryCfg:
@@ -25,6 +36,8 @@ class GeometryCfg:
     num_pipe_prims: List[int] = None
     D_range: List[float] = None
     L_range_straight: List[float] = None
+    D_change_prob: float = 0.1
+        
     L_range_bend: List[float] = None
     angle_range_bend: List[float] = None
     D_step_bend: float = 0.05
@@ -48,7 +61,10 @@ class PipeEnvGenerator:
         self.generation = GeneratorCfg(
             mode=gen_data.get("mode", "random"),
             second_mode=gen_data.get("second_mode", "safe"),
-            fixed_info=gen_data.get("fixed_info", [])
+            fixed_info=gen_data.get("fixed_info", []),
+            total_nums=gen_data.get("total_nums", 20),
+            meshes_path=gen_data.get("meshes_path", "./meshes"),
+            json_path=gen_data.get("json_path", "./json")
         )
 
         # ? 2. 实例化 GeometryCfg
@@ -56,6 +72,7 @@ class PipeEnvGenerator:
         self.pipe = GeometryCfg(
             num_pipe_prims=pipe_data.get("num_pipe_prims", [3, 6]),
             D_range=pipe_data.get("D_range", [0.2, 0.4]),
+            D_change_prob=pipe_data.get("D_change_prob", 0.1),
             L_range_straight=pipe_data.get("L_range_straight", [0.5, 3.0]),
             L_range_bend=pipe_data.get("L_range_bend", [0.3, 0.5]),
             angle_range_bend=pipe_data.get("angle_range_bend", [45, 90]),
@@ -87,8 +104,10 @@ class PipeEnvGenerator:
             self.bend_angle = np.append(self.bend_angle, self.pipe.angle_range_bend[1])
     def generate_pipe(self):
         # ! 核心生成管道队列的函数
+        # 清空之前生成的管道信息
+        self.all_generated_pipes.clear()
         # 采样生成目标管道数目
-        num_pipes = np.random.randint(self.pipe.num_pipe_prims[0], self.pipe.num_pipe_prims[1])
+        num_pipes = np.random.randint(self.pipe.num_pipe_prims[0], self.pipe.num_pipe_prims[1]+1)
         
         # 初始化原始齐次变换矩阵， 初始直管道沿世界坐标系y轴放置，原点为(0,0,0)
         T = np.eye(4)
@@ -149,6 +168,8 @@ class PipeEnvGenerator:
             elif type == 0: 
                 # 进入这里， 说明当前管段是直管
                 d = np.random.uniform(self.pipe.D_range[0], self.pipe.D_range[1])
+                if np.random.rand() > self.pipe.D_change_prob and i > 0: # 有一定概率保持直径不变， 增加管道的连续性
+                    d = self.all_generated_pipes[-1]['info'][2]
                 # 安全模式限制管径
                 if self.generation.second_mode == "safe" and i > 0:
                     if self.all_generated_pipes[-1]['info'][1] == 1: 
@@ -176,7 +197,7 @@ class PipeEnvGenerator:
                 T = T @ T_post
         # * 将所有的管道网格进行合并
         combined_mesh = mesh.Mesh(np.concatenate([m.data for m in pipe_mesh]))
-        return combined_mesh
+        return combined_mesh , self.all_generated_pipes
         
         
     def _load_yaml(self, path: str) -> dict:
@@ -279,45 +300,99 @@ class PipeEnvGenerator:
 # 单元测试 (仅当直接运行此文件时执行)
 if __name__ == "__main__":
     cfg = PipeEnvGenerator()
-    print(f"Loaded Mode: {cfg.generation.mode}")
-    print(f"Loaded Dia Range: {cfg.pipe.D_range}")
+    MESHES_PATH = os.path.join(CURRENT_DIR, cfg.generation.meshes_path)
+    JSON_PATH = os.path.join(CURRENT_DIR, cfg.generation.json_path)
+    total_nums = cfg.generation.total_nums
+    
+    id_length = 6 # 生成文件的保存ID号位数，如1号文件为000001
+    # 获取当前已经存在的文件数量，以免编号重复
+    mesh_dir = Path(MESHES_PATH)
+    json_dir = Path(JSON_PATH)
+    mesh_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
+    json_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
+    existing_ids = (int(p.stem) for p in mesh_dir.glob("*.STL") if p.stem.isdigit())
+    start_id = max(existing_ids, default=1) # 这里不用+1 因为对应路径下放的有一个stand_pipe.STL
+    
+    
+    # 打印一些配置的信息
+    print("Generation Mode:", cfg.generation.mode)
+    print("Total Pipes to Generate:", total_nums)
+        
+    print("Meshes Path:", MESHES_PATH)
+    print("JSON Path:", JSON_PATH)
+    print("Start ID for Saving Files:", start_id)
+    
+    # 如果开启了可视化，开启交互模式
+    if ENABLE_VISUALIZATION:
+        plt.ion()
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
     
     # 生成管道网格
-    combined_mesh = cfg.generate_pipe()
-    
-    # 可视化
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    
-    #1. 绘制世界坐标系原点和轴
-    origin = [0, 0, 0]
-    length = 1.0 # 坐标轴长度，根据现在的单位是米，设为1米比较合适，或者根据bbox调整
-    # X轴 - 红色
-    ax.quiver(0, 0, 0, length, 0, 0, color='r', arrow_length_ratio=0.1, linewidth=2, label='World X')
-    # Y轴 - 绿色 
-    ax.quiver(0, 0, 0, 0, length, 0, color='g', arrow_length_ratio=0.1, linewidth=2, label='World Y')
-    # Z轴 - 蓝色
-    ax.quiver(0, 0, 0, 0, 0, length, color='b', arrow_length_ratio=0.1, linewidth=2, label='World Z')
+    for i in range(total_nums):
+        [combined_mesh , all_pipes_info] = cfg.generate_pipe()
+        # 保存网格和信息
+        filename = f"{i + start_id:0{id_length}d}"
+        mesh_path = os.path.join(MESHES_PATH, f"{filename}.STL")
+        json_path = os.path.join(JSON_PATH, f"{filename}.json")
+        combined_mesh.save(mesh_path)
+        
+        # 自定义一个编码器，用于处理 NumPy 数组
+        class NumpyEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist() # 将 numpy 数组转为普通列表
+                return super().default(obj)
+                
+        with open(json_path, 'w') as f:
+            json.dump(all_pipes_info, f, cls=NumpyEncoder, indent=2)
+            
+        # ---------------------------------------------------------
+        # 实时可视化与信息打印
+        # ---------------------------------------------------------
+        if ENABLE_VISUALIZATION:
+            print(f"\n[{i+1}/{total_nums}] Generated Pipe: {filename}")
+            for idx, pipe_info in enumerate(all_pipes_info):
+                print(f"  Segment {idx}: Type={'Bend' if pipe_info['info'][1]==1 else 'Straight'}, "
+                    f"D={pipe_info['info'][2]:.3f}, L={pipe_info['info'][3]:.3f}")
+                print(f"  Transform:\n{pipe_info['transform']}")
+            
+            ax.clear() # 清除上一帧
+            
+            # 1. 绘制世界坐标系原点和轴
+            length = 1.0 
+            ax.quiver(0, 0, 0, length, 0, 0, color='r', arrow_length_ratio=0.1, linewidth=2, label='World X')
+            ax.quiver(0, 0, 0, 0, length, 0, color='g', arrow_length_ratio=0.1, linewidth=2, label='World Y')
+            ax.quiver(0, 0, 0, 0, 0, length, color='b', arrow_length_ratio=0.1, linewidth=2, label='World Z')
 
-    poly_collection = art3d.Poly3DCollection(combined_mesh.vectors)
-    poly_collection.set_edgecolor('k')
-    poly_collection.set_alpha(0.6)
-    ax.add_collection3d(poly_collection)
-    
-    # 设置坐标轴显示范围，防止图形被压缩
-    max_range = np.array([combined_mesh.x.max()-combined_mesh.x.min(), 
-                        combined_mesh.y.max()-combined_mesh.y.min(), 
-                        combined_mesh.z.max()-combined_mesh.z.min()]).max() / 2.0
-    
-    mid_x = (combined_mesh.x.max()+combined_mesh.x.min()) * 0.5
-    mid_y = (combined_mesh.y.max()+combined_mesh.y.min()) * 0.5
-    mid_z = (combined_mesh.z.max()+combined_mesh.z.min()) * 0.5
-    
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-    
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    plt.show()
+            poly_collection = art3d.Poly3DCollection(combined_mesh.vectors)
+            poly_collection.set_edgecolor('k')
+            poly_collection.set_alpha(0.6)
+            ax.add_collection3d(poly_collection)
+            
+            # 设置坐标轴显示范围，防止图形被压缩
+            max_range = np.array([combined_mesh.x.max()-combined_mesh.x.min(), 
+                                combined_mesh.y.max()-combined_mesh.y.min(), 
+                                combined_mesh.z.max()-combined_mesh.z.min()]).max() / 2.0
+            
+            mid_x = (combined_mesh.x.max()+combined_mesh.x.min()) * 0.5
+            mid_y = (combined_mesh.y.max()+combined_mesh.y.min()) * 0.5
+            mid_z = (combined_mesh.z.max()+combined_mesh.z.min()) * 0.5
+            
+            ax.set_xlim(mid_x - max_range, mid_x + max_range)
+            ax.set_ylim(mid_y - max_range, mid_y + max_range)
+            ax.set_zlim(mid_z - max_range, mid_z + max_range)
+            
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.set_title(f"Pipe ID: {filename}")
+            
+            plt.draw()
+            plt.pause(VISUALIZATION_PAUSE_TIME) # 暂停指定时间
+            
+    if ENABLE_VISUALIZATION:
+        plt.ioff() # 关闭交互模式
+        plt.show() # 保持最后一个窗口打开
+    else:
+        print(f"\nSuccessfully generated {total_nums} pipes.")
