@@ -19,7 +19,7 @@ VISUALIZATION_PAUSE_TIME = 1.0  # 每个网格显示的停留时间（秒）
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 YAML_PATH = os.path.join(CURRENT_DIR, "config" , "pipe_env.yaml")
-STRAIGHT_PIPE_PATH = os.path.join(CURRENT_DIR, "meshes", "stand_pipe.STL")
+STRAIGHT_PIPE_PATH = os.path.join(CURRENT_DIR, "stand_pipe.STL")
 
 @dataclass
 class GeneratorCfg:
@@ -28,6 +28,7 @@ class GeneratorCfg:
     second_mode: str = "safe"  # "random" or "safe"
     total_nums: int = 20
     meshes_path: str = "./meshes"
+    usd_path: str = "./usd"
     json_path: str = "./json"
 
 @dataclass
@@ -64,6 +65,7 @@ class PipeEnvGenerator:
             fixed_info=gen_data.get("fixed_info", []),
             total_nums=gen_data.get("total_nums", 20),
             meshes_path=gen_data.get("meshes_path", "./meshes"),
+            usd_path=gen_data.get("usd_path", "./usd"),
             json_path=gen_data.get("json_path", "./json")
         )
 
@@ -211,16 +213,60 @@ class PipeEnvGenerator:
             print(f"[Error] Failed to load YAML: {e}")
             return {}
     
-    def generate_straight_pipe(self, dia, length , trans = None):
+    def generate_straight_pipe(self, dia, length , trans = None, num_points=35):
         """
-        从原型样板文件(1m直径1m长)生成直管的STL文件, 原始文件中y轴为管长方向
+        Procedurally generate a straight pipe mesh (cylinder) along the Y-axis.
         """
-        pipe_mesh = mesh.Mesh.from_file(STRAIGHT_PIPE_PATH)
-        # 缩放管道以匹配指定直径和长度
-        pipe_mesh.x *= dia
-        pipe_mesh.y *= length
-        pipe_mesh.z *= dia
-        # 可选：应用变换（旋转/平移）
+        # Create vertices
+        vertices = []
+        # Bottom circle (y=0) and Top circle (y=length)
+        phi = np.linspace(0, 2 * np.pi, num_points)
+        r = dia / 2.0
+        
+        # Vertices for the side surface
+        for j in range(num_points):
+            ph = phi[j]
+            px = r * np.sin(ph)
+            pz = r * np.cos(ph) # align to match bent pipe's start orientation
+            # Bottom vertex
+            vertices.append([px, 0.0, pz])
+            # Top vertex
+            vertices.append([px, length, pz])
+            
+        # Add center points for caps
+        vertices.append([0.0, 0.0, 0.0])      # Bottom center
+        idx_bottom_center = len(vertices) - 1
+        vertices.append([0.0, length, 0.0])   # Top center
+        idx_top_center = len(vertices) - 1
+        
+        # Create faces
+        faces = []
+        for j in range(num_points):
+            # Side faces (2 triangles per segment)
+            # Indices: 2*j (bottom), 2*j+1 (top)
+            # Next indices: 2*((j+1)%num_points), 2*((j+1)%num_points)+1
+            
+            p1 = 2 * j
+            p2 = 2 * j + 1
+            p3 = 2 * ((j + 1) % num_points) + 1
+            p4 = 2 * ((j + 1) % num_points)
+            
+            faces.append([p1, p2, p3])
+            faces.append([p1, p3, p4])
+            
+            # Bottom cap
+            faces.append([idx_bottom_center, 2 * ((j + 1) % num_points), 2 * j])
+            
+            # Top cap
+            faces.append([idx_top_center, 2 * j + 1, 2 * ((j + 1) % num_points) + 1])
+            
+        # Create mesh
+        data = np.zeros(len(faces), dtype=mesh.Mesh.dtype)
+        pipe_mesh = mesh.Mesh(data)
+        for i, f in enumerate(faces):
+            for j in range(3):
+                pipe_mesh.vectors[i][j] = vertices[f[j]]
+                
         if trans is not None:
             pipe_mesh.transform(trans)
         return pipe_mesh
@@ -311,7 +357,7 @@ if __name__ == "__main__":
     mesh_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
     json_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
     existing_ids = (int(p.stem) for p in mesh_dir.glob("*.STL") if p.stem.isdigit())
-    start_id = max(existing_ids, default=1) # 这里不用+1 因为对应路径下放的有一个stand_pipe.STL
+    start_id = max(existing_ids, default=0) + 1 # 这里不用+1 因为对应路径下放的有一个stand_pipe.STL
     
     
     # 打印一些配置的信息

@@ -26,7 +26,7 @@ PIPE_ROBOT_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.8),
+        pos=(0.0, 0.1, 0.4),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             r".*main_steer_.*": 0.0,  # 所有主动轮舵向

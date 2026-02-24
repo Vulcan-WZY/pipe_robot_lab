@@ -9,8 +9,9 @@ generation:
     second_mode: "safe"     # random: 管道直径完全随机
                             # safe: 限定弯管前后必须为直管，且弯管的直径必须等于前后直管的直径
     # * 输出保存路径
-    total_nums: 5 # 一次运行生成器批量生成的管道环境数目
+    total_nums: 1 # 一次运行生成器批量生成的管道环境数目
     meshes_path: "./meshes" # 存放管道网格的相对路径
+    usd_path: "./usd" # 存放管道环境的USD文件的相对路径
     json_path: "./json" # 存放管道参数以及变换矩阵的json文件的相对路径
 
 pipe:

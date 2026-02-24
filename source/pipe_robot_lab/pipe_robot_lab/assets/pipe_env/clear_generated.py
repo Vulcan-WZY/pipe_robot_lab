@@ -15,6 +15,7 @@ class GeneratorCfg:
     second_mode: str = "safe"  # "random" or "safe"
     total_nums: int = 20
     meshes_path: str = "./meshes"
+    usd_path: str = "./usd"
     json_path: str = "./json"
 
 class PipeEnvCleaner:
@@ -29,6 +30,7 @@ class PipeEnvCleaner:
             fixed_info=gen_data.get("fixed_info", []),
             total_nums=gen_data.get("total_nums", 20),
             meshes_path=gen_data.get("meshes_path", "./meshes"),
+            usd_path=gen_data.get("usd_path", "./usd"),
             json_path=gen_data.get("json_path", "./json")
         )
 
@@ -48,12 +50,14 @@ if __name__ == "__main__":
     cfg = PipeEnvCleaner()
     MESHES_PATH = os.path.join(CURRENT_DIR, cfg.generation.meshes_path)
     JSON_PATH = os.path.join(CURRENT_DIR, cfg.generation.json_path)
-    
+    USD_PATH = os.path.join(CURRENT_DIR, cfg.generation.usd_path)
     mesh_dir = Path(MESHES_PATH)
     json_dir = Path(JSON_PATH)
+    usd_dir = Path(USD_PATH)
     
     print(f"Target Meshes Path: {MESHES_PATH}")
     print(f"Target JSON Path: {JSON_PATH}")
+    print(f"Target USD Path: {USD_PATH}")
     
     # 1. 清理 JSON 文件
     json_count = 0
@@ -68,18 +72,23 @@ if __name__ == "__main__":
     # 2. 清理 STL 文件 (保留 stand_pipe.STL)
     stl_count = 0
     if mesh_dir.exists():
-        for stl_file in mesh_dir.glob("*.STL"):
-            # 检查是否是保留文件
-            if stl_file.name == "stand_pipe.STL":
-                print(f"Skipping template file: {stl_file.name}")
-                continue
-            
+        for stl_file in mesh_dir.glob("*.STL"):            
             try:
                 stl_file.unlink()
                 stl_count += 1
             except Exception as e:
                 print(f"Failed to delete {stl_file}: {e}")
+    # 3. 清理 USD 文件
+    usd_count = 0
+    if usd_dir.exists():
+        for usd_file in usd_dir.glob("*.usd"):
+            try:
+                usd_file.unlink()
+                usd_count += 1
+            except Exception as e:
+                print(f"Failed to delete {usd_file}: {e}")
                 
     print(f"\nCleanup Complete!")
     print(f"Deleted {json_count} JSON files.")
     print(f"Deleted {stl_count} STL files.")
+    print(f"Deleted {usd_count} USD files.")

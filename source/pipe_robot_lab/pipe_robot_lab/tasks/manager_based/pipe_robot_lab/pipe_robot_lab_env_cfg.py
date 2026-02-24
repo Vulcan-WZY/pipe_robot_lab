@@ -19,61 +19,92 @@ from .mdp.rewards import RewardsCfg
 from .mdp.events import EventCfg
 from .mdp.terminations import TerminationsCfg
 
+# ! 引入随机加载管道
+import os
+import random
+import glob
+# 定位到生成器产生的管道路径
+from pipe_robot_lab.assets.pipe_env.pipe_generator import CURRENT_DIR
+MESHES_DIR = os.path.join(CURRENT_DIR, "usd")
+JSON_DIR = os.path.join(CURRENT_DIR, "json")
+
+# 获取所有生成的 STL 文件 (排除模板文件 stand_pipe.STL)
+all_pipe_stls = [p for p in glob.glob(os.path.join(MESHES_DIR, "*.usd"))]
+# 随机选择一个管道 (如果文件夹为空则给个默认空字符串防报错)
+SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
+# 推导出对应的 JSON 文件路径
+SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".json") if SELECTED_PIPE_STL else ""
+print(f"[INFO] Selected Pipe Environment: {SELECTED_PIPE_STL}")
 ##
 # Scene definition
 ##
 @configclass
 class PipeRobotSceneCfg(InteractiveSceneCfg):
     # 地面
-    ground = AssetBaseCfg(
-        prim_path="/World/defaultGroundPlane", 
-        spawn=sim_utils.GroundPlaneCfg()
-    )
+    # ground = AssetBaseCfg(
+    #     prim_path="/World/defaultGroundPlane", 
+    #     spawn=sim_utils.GroundPlaneCfg()
+    # )
     # 光照
     light = AssetBaseCfg(
         prim_path="/World/lightDistant", 
         spawn=sim_utils.DistantLightCfg(intensity=5000.0)
     )
-    # 管道障碍物 (静态)
-    pipe_obstacle01 = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/PipeObstacle1",
-        spawn=sim_utils.CylinderCfg(
-            radius=0.18,        # 直径 360mm
-            height=2.0,         # 长度 2m
-            rigid_props=None,   # 静态 (Static)
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            # 配置高摩擦力材质
-            physics_material=sim_utils.RigidBodyMaterialCfg(
-                static_friction=1.0,   # 静摩擦系数
-                dynamic_friction=1.0,  # 动摩擦系数
-                restitution=0.0,       # 恢复系数(0表示不反弹)
-            ),
+    
+    # * 改为使用随机生成的管道
+    pipe_env = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/PipeEnv",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=SELECTED_PIPE_STL,
+            rigid_props= None,
+            collision_props=sim_utils.CollisionPropertiesCfg(), # 开启碰撞
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.5), # 中心位置
-            rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+            pos=(0.0, 0.0, 0.0), # 根据生成器设置初始位置
+            rot=(1.0, 0.0, 0.0, 0.0), # 默认无旋转 (w, x, y, z)
         ),
     )
-    pipe_obstacle02 = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/PipeObstacle2",
-        # spawn= si
-        spawn=sim_utils.CylinderCfg(
-            radius=0.18,        # 直径 360mm
-            height=2.0,         # 长度 2m
-            rigid_props=None,   # 静态 (Static)
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            # 配置高摩擦力材质
-            physics_material=sim_utils.RigidBodyMaterialCfg(
-                static_friction=1.0,   # 静摩擦系数
-                dynamic_friction=1.0,  # 动摩擦系数
-                restitution=0.0,       # 恢复系数(0表示不反弹)
-            ),
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.0, 1.0, 1.5), # 中心位置
-            rot=(1, 0.0, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
-        ),
-    )
+    
+    # # 管道障碍物 (静态)
+    # pipe_obstacle01 = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/PipeObstacle1",
+    #     spawn=sim_utils.CylinderCfg(
+    #         radius=0.18,        # 直径 360mm
+    #         height=2.0,         # 长度 2m
+    #         rigid_props=None,   # 静态 (Static)
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #         # 配置高摩擦力材质
+    #         physics_material=sim_utils.RigidBodyMaterialCfg(
+    #             static_friction=1.0,   # 静摩擦系数
+    #             dynamic_friction=1.0,  # 动摩擦系数
+    #             restitution=0.0,       # 恢复系数(0表示不反弹)
+    #         ),
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(0.0, 0.0, 0.5), # 中心位置
+    #         rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+    #     ),
+    # )
+    # pipe_obstacle02 = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/PipeObstacle2",
+    #     # spawn= si
+    #     spawn=sim_utils.CylinderCfg(
+    #         radius=0.18,        # 直径 360mm
+    #         height=2.0,         # 长度 2m
+    #         rigid_props=None,   # 静态 (Static)
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #         # 配置高摩擦力材质
+    #         physics_material=sim_utils.RigidBodyMaterialCfg(
+    #             static_friction=1.0,   # 静摩擦系数
+    #             dynamic_friction=1.0,  # 动摩擦系数
+    #             restitution=0.0,       # 恢复系数(0表示不反弹)
+    #         ),
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(0.0, 1.0, 1.5), # 中心位置
+    #         rot=(1, 0.0, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+    #     ),
+    # )
     # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
     robot: ArticulationCfg = PIPE_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     
