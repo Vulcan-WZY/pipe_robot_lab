@@ -77,4 +77,5 @@ tests/
 # 生成的管道环境相关文件
 source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/meshes/*
 source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/json/*
+source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/objs/*
 # source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/usd/*

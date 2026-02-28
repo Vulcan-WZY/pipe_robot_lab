@@ -57,7 +57,10 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.UsdFileCfg(
             usd_path=SELECTED_PIPE_STL,
             rigid_props= None,
-            collision_props=sim_utils.CollisionPropertiesCfg(), # 开启碰撞
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                    contact_offset=0.02,  # 增加接触偏移以改善碰撞检测
+                    rest_offset=0.001,      # 设置休息偏移为0以确保精确碰撞响应
+            ),
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.0), # 根据生成器设置初始位置
@@ -174,3 +177,5 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
+        
+        self.sim.physx.bounce_threshold_velocity = 0.2
