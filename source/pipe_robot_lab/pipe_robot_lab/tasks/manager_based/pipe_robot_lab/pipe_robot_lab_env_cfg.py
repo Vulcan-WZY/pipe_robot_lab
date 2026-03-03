@@ -23,32 +23,52 @@ from .mdp.terminations import TerminationsCfg
 import os
 import random
 import glob
+import json
+import torch
 # 定位到生成器产生的管道路径
 from pipe_robot_lab.assets.pipe_env.pipe_generator import CURRENT_DIR
 MESHES_DIR = os.path.join(CURRENT_DIR, "usd")
 JSON_DIR = os.path.join(CURRENT_DIR, "json")
-
 # 获取所有生成的 STL 文件 (排除模板文件 stand_pipe.STL)
 all_pipe_stls = [p for p in glob.glob(os.path.join(MESHES_DIR, "*.usd"))]
 # 随机选择一个管道 (如果文件夹为空则给个默认空字符串防报错)
 SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
 # 推导出对应的 JSON 文件路径
 SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".json") if SELECTED_PIPE_STL else ""
-print(f"[INFO] Selected Pipe Environment: {SELECTED_PIPE_STL}")
+# ! 随机管道代码段结束
+
 ##
 # Scene definition
 ##
 @configclass
 class PipeRobotSceneCfg(InteractiveSceneCfg):
     # 地面
-    # ground = AssetBaseCfg(
-    #     prim_path="/World/defaultGroundPlane", 
-    #     spawn=sim_utils.GroundPlaneCfg()
-    # )
+    ground = AssetBaseCfg(
+        prim_path="/World/defaultGroundPlane", 
+        spawn=sim_utils.GroundPlaneCfg(),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 0.0, -10.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+    )
     # 光照
     light = AssetBaseCfg(
         prim_path="/World/lightDistant", 
-        spawn=sim_utils.DistantLightCfg(intensity=5000.0)
+        spawn=sim_utils.DistantLightCfg(intensity=2500.0)
+    )
+    
+    # 天空布景
+    sky = AssetBaseCfg(
+        prim_path="/World/skyDome",
+        spawn=sim_utils.DomeLightCfg(
+            # 基础环境光强度
+            intensity=900.0,
+            # 【方案A：纯色天空】赋予全局光一个天蓝色调。如果网络不好加载不了贴图，这个最实用且效果很好。
+            color=(0.75, 0.85, 1.0),
+            # 【方案B：真实的 HDR 贴图天空】如果网络能连接 NVIDIA 默认服务器，取消下面这行注释。
+            # 官方最常用的无云/少云晴空 HDR，加上后会有真实的太阳光晕和天空渐变。
+            # texture_file="https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/NVIDIA/Backgrounds/skies/clear_sky.hdr",
+        )
     )
     
     # * 改为使用随机生成的管道
@@ -58,7 +78,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             usd_path=SELECTED_PIPE_STL,
             rigid_props= None,
             collision_props=sim_utils.CollisionPropertiesCfg(
-                    contact_offset=0.02,  # 增加接触偏移以改善碰撞检测
+                    contact_offset=0.00,  # 增加接触偏移以改善碰撞检测
                     rest_offset=0.001,      # 设置休息偏移为0以确保精确碰撞响应
             ),
         ),
@@ -86,26 +106,6 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
     #     init_state=AssetBaseCfg.InitialStateCfg(
     #         pos=(0.0, 0.0, 0.5), # 中心位置
     #         rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
-    #     ),
-    # )
-    # pipe_obstacle02 = AssetBaseCfg(
-    #     prim_path="{ENV_REGEX_NS}/PipeObstacle2",
-    #     # spawn= si
-    #     spawn=sim_utils.CylinderCfg(
-    #         radius=0.18,        # 直径 360mm
-    #         height=2.0,         # 长度 2m
-    #         rigid_props=None,   # 静态 (Static)
-    #         collision_props=sim_utils.CollisionPropertiesCfg(),
-    #         # 配置高摩擦力材质
-    #         physics_material=sim_utils.RigidBodyMaterialCfg(
-    #             static_friction=1.0,   # 静摩擦系数
-    #             dynamic_friction=1.0,  # 动摩擦系数
-    #             restitution=0.0,       # 恢复系数(0表示不反弹)
-    #         ),
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(
-    #         pos=(0.0, 1.0, 1.5), # 中心位置
-    #         rot=(1, 0.0, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
     #     ),
     # )
     # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
@@ -166,6 +166,10 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
+    # 新增字段：用于存储当前管道的详细参数
+    pipe_transform: torch.Tensor = None  # 存储每个管道元件的齐次变换矩阵，大小为 [N,4,4]，其中 N 是管道段数
+    pipe_info: torch.Tensor = None       # 存储每个管道元件的描述参数，大小为[N , 6]
+    
     # Post initialization
     def __post_init__(self) -> None:
         """Post initialization."""
@@ -179,3 +183,21 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         
         self.sim.physx.bounce_threshold_velocity = 0.2
+    
+        # * 读取并挂载本轮随机加载的JSON管道描述文件
+        if os.path.exists(SELECTED_PIPE_JSON):
+            with open(SELECTED_PIPE_JSON, 'r', encoding='utf-8') as f:
+                raw_data = json.load(f)
+            transform_list = [item["transform"] for item in raw_data]
+            info_list = [item["info"] for item in raw_data]
+            
+            # 直接转换为Tensor， PyTorch会自动推断并形成对应形状
+            self.pipe_transform = torch.tensor(transform_list, dtype=torch.float32)  # [N, 4, 4]
+            self.pipe_info = torch.tensor(info_list, dtype=torch.float32)            # [N, 6]
+            print(f"[INFO] Pipe Transform Tensor Shape: {self.pipe_transform.shape}")
+            print(f"[INFO] Pipe Info Tensor Shape: {self.pipe_info.shape}")
+        else:
+            self.pipe_transform = torch.eye(4).unsqueeze(0)  # Shape: [1, 4, 4]
+            self.pipe_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32) # Shape: [1, 6]
+            print(f"[WARNING] Could not find JSON info at: {SELECTED_PIPE_JSON}")
+        

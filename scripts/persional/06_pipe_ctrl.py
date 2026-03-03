@@ -228,6 +228,67 @@ class PiprRobotDemo:
                 self.cmd_vel[1] = 0.0
         return True
 
+    def _get_obs_terms_meta(self, obs_mgr, group_name: str):
+        """获取指定 Observation 组的 term 名称与维度元数据。"""
+        # term names
+        if hasattr(obs_mgr, "group_obs_term_names"):
+            term_names_list = obs_mgr.group_obs_term_names.get(group_name, [])
+        elif hasattr(obs_mgr, "_group_obs_term_names"):
+            term_names_list = obs_mgr._group_obs_term_names.get(group_name, [])
+        else:
+            term_names_list = []
+
+        # term dims
+        if hasattr(obs_mgr, "_group_obs_term_dim"):
+            term_dims_list = obs_mgr._group_obs_term_dim.get(group_name, [])
+        elif hasattr(obs_mgr, "group_obs_term_dim"):
+            term_dims_list = obs_mgr.group_obs_term_dim.get(group_name, [])
+        else:
+            if hasattr(obs_mgr, "group_obs_dim"):
+                term_dims_list = obs_mgr.group_obs_dim.get(group_name, [])
+            else:
+                term_dims_list = []
+
+        if not term_names_list and term_dims_list:
+            print("    [Info] Names not found, printing by index chunks based on dims.")
+            term_names_list = [f"Term_{i}" for i in range(len(term_dims_list))]
+
+        if len(term_names_list) != len(term_dims_list):
+            print(f"    [Warning] Names/Dims mismatch: {len(term_names_list)} vs {len(term_dims_list)}")
+
+        return term_names_list, term_dims_list
+
+    def _print_observation_group(self, obs: dict, group_name: str, env_idx: int = 0):
+        """打印指定 Observation 组的 shape 与按 term 切片后的数值。"""
+        group_obs = obs.get(group_name)
+        group_name_upper = group_name.capitalize()
+
+        if isinstance(group_obs, torch.Tensor):
+            print(f"  > [{group_name_upper}] Tensor Shape: {tuple(group_obs.shape)}")
+            obs_mgr = self.env.observation_manager
+            try:
+                term_names_list, term_dims_list = self._get_obs_terms_meta(obs_mgr, group_name)
+
+                current_idx = 0
+                for name, dims in zip(term_names_list, term_dims_list):
+                    length = int(np.prod(dims))
+                    end_idx = current_idx + length
+
+                    if end_idx <= group_obs.shape[1]:
+                        val = group_obs[env_idx, current_idx:end_idx].cpu().numpy()
+                        print(f"    - {name:<18} [{length:2d}]: {np.array2string(val, precision=3, suppress_small=True)}")
+                    else:
+                        print(f"    - {name:<18}: [Index Error] {current_idx}:{end_idx} vs {group_obs.shape[1]}")
+
+                    current_idx = end_idx
+            except Exception as e:
+                print(f"    [Smart Print Failed]: {e}")
+                print(f"    Available attributes: {[k for k in dir(obs_mgr) if 'group' in k or 'term' in k or 'dim' in k]}")
+        elif group_obs is None:
+            print(f"  > [{group_name_upper}] Key not found in obs.")
+        else:
+            print(f"  > [{group_name_upper}] Unexpected type: {type(group_obs)}")
+
     def run(self):
         """运行主循环"""
         obs, _ = self.env.reset()
@@ -290,90 +351,10 @@ class PiprRobotDemo:
             # count += 1
             if count % 50 == 0:
                 print(f"[Frame {count}] Observation Debug:")
-                
-                # ---------------------------------------------------------
-                # ! 1. 检查 Policy 组 (Tensor) - 智能切片打印
-                # ---------------------------------------------------------
-                policy_obs = obs.get("policy")
-                if isinstance(policy_obs, torch.Tensor):
-                    shape_info = tuple(policy_obs.shape)
-                    print(f"  > [Policy] Tensor Shape: {shape_info}")
-                    
-                    # 使用 Observation Manager 的元数据来反解每个 term 的含义
-                    obs_mgr = self.env.observation_manager
-                    try:
-                        # 尝试获取 group_obs_term_names
-                        if hasattr(obs_mgr, "group_obs_term_names"):
-                            term_names_list = obs_mgr.group_obs_term_names.get("policy", [])
-                        elif hasattr(obs_mgr, "_group_obs_term_names"): # 可能是私有属性
-                            term_names_list = obs_mgr._group_obs_term_names.get("policy", [])
-                        else:
-                            # 如果都不存在，尝试通过 group_obs_dim 的 key 获取 (不保证顺序完全正确，但通常是有序字典)
-                            # 或者尝试从 cfg 中获取
-                            term_names_list = []
-                            # 这是一个 fallback
-                            
-                        # 尝试获取 group_obs_dim
-                        # 注意：如果 group_obs_dim 返回的是合并后的总维度 (len=1)，我们需要去找分项维度
-                        # 通常存储在 `_group_obs_term_dim` 中
-                        if hasattr(obs_mgr, "_group_obs_term_dim"):
-                            term_dims_list = obs_mgr._group_obs_term_dim.get("policy", [])
-                        elif hasattr(obs_mgr, "group_obs_term_dim"):
-                            term_dims_list = obs_mgr.group_obs_term_dim.get("policy", [])
-                        else:
-                            # fallback: 如果都没有，尝试用 group_obs_dim (但可能 merge 过了)
-                            if hasattr(obs_mgr, "group_obs_dim"):
-                                term_dims_list = obs_mgr.group_obs_dim.get(
-                                    "policy", [])
-                            else:
-                                term_dims_list = []
 
-                        current_idx = 0
-
-                        # 如果确实拿不到 names，不仅打印 raw，还可以尝试只打印 dim
-                        if not term_names_list and term_dims_list:
-                            print(
-                                f"    [Info] Names not found, printing by index chunks based on dims.")
-                            term_names_list = [
-                                f"Term_{i}" for i in range(len(term_dims_list))]
-                        
-                        # 确保列表长度一致
-                        if len(term_names_list) != len(term_dims_list):
-                            print(f"    [Warning] Names/Dims mismatch: {len(term_names_list)} vs {len(term_dims_list)}")
-                            
-                        for name, dims in zip(term_names_list, term_dims_list):
-                            # dims 此时通常是元组，例如 (12,)
-                            # 计算这一项展平后的总长度
-                            length = int(np.prod(dims))
-                            
-                            end_idx = current_idx + length
-                            
-                            # 获取第 0 个环境的数据切片
-                            if end_idx <= policy_obs.shape[1]:
-                                val = policy_obs[0, current_idx:end_idx].cpu().numpy()
-                                # 美化打印
-                                print(f"    - {name:<18} [{length:2d}]: {np.array2string(val, precision=3, suppress_small=True)}")
-                            else:
-                                print(f"    - {name:<18}: [Index Error] {current_idx}:{end_idx} vs {policy_obs.shape[1]}")
-                            
-                            current_idx = end_idx
-                    except Exception as e:
-                        print(f"    [Smart Print Failed]: {e}")
-                        # 打印可用属性以便调试
-                        print(f"    Available attributes: {[k for k in dir(obs_mgr) if 'group' in k or 'term' in k or 'dim' in k]}")
-
-                elif policy_obs is None:
-                    print("  > [Policy] Key not found in obs.")
-                else:
-                    print(f"  > [Policy] Unexpected type: {type(policy_obs)}")
-
-                # ---------------------------------------------------------
-                # ! 2. 检查 Critic 组 (Tensor)
-                # ---------------------------------------------------------
-                critic_obs = obs.get("critic")
-                if isinstance(critic_obs, torch.Tensor):
-                    shape_info = tuple(critic_obs.shape)
-                    print(f"  > [Critic] Tensor Shape: {shape_info}")
+                # 只需要传入组名即可自动切片并打印
+                self._print_observation_group(obs, "policy")
+                self._print_observation_group(obs, "critic")
 
                 # ---------------------------------------------------------
                 # ! 3. 检查 Camera 组 (Dict)

@@ -49,7 +49,13 @@ def get_imu_lin_acc(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch
     """Read IMU linear acceleration (lin_acc_b) from sensor."""
     sensor = env.scene.sensors[sensor_cfg.name]
     return sensor.data.lin_acc_b.view(env.num_envs, -1)
-
+    
+def get_relative_pose(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    # * 本函数用于计算输入的刚体body与某个管道元件的相对坐标，返回一个2*4张量
+    # 第一行 [id , x, y, z]是刚体坐标在某个管道元件的ID号以及在管道坐标系下的位置
+    # 第二行 [roll, pitch, yaw, 0]是刚体坐标系相对于管道坐标系的欧拉角表示的姿态（最后一个元素占位）
+    a = 1
+    
 
 # =============================================================================
 # 4. 观测配置 (Observations Configuration)
@@ -201,6 +207,16 @@ class ObservationsCfg:
             # Critic 观测不拼接，保持字典形式以便区分不同类型的输入
             self.concatenate_terms = True # 用于配置覆盖父类的设置
             self.enable_corruption = False # Critic 观测通常不加噪声
+    
+    # @configclass
+    # class DebugCfg(ObsGroup):
+    #     # 用于调试的观测项， 可以在测试时打印一些状态信息， 但不参与训练
+    #     back_link_pos = ObsTerm(
+    #         func = get_relative_pose,
+    #         params = {
+    #             "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])
+    #         }
+    #     )
     
     # 注册到总配置
     # 注意：SKRL能很好地处理这种字典输入
