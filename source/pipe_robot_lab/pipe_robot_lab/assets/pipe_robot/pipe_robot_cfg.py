@@ -1,3 +1,9 @@
+# ===========
+# Date: 2026-01-30 10:49
+# Author: Vulcan
+# LastEditTime: 2026-03-12 10:50
+# Description: 
+# ==========
 import os
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
@@ -10,6 +16,7 @@ USD_PATH = os.path.join(CURRENT_DIR, "./usd/pipe_robot_rename.usd")
 PIPE_ROBOT_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=USD_PATH,
+        activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,

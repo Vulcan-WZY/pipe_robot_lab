@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-03-02 11:41
 # Author: Vulcan
-# LastEditTime: 2026-03-13 10:47
+# LastEditTime: 2026-03-13 10:28
 # Description: 用于存放一些计算与给定管道进行交互的函数，处理点或机器人与完整管路的关系
 # ==========
 
@@ -9,7 +9,7 @@ import torch
 import math
 import time
 
-def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: torch.Tensor, already_inverted = True) -> torch.Tensor:
+def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: torch.Tensor) -> torch.Tensor:
     """
     points: [P,3] 世界坐标系下的点坐标
     trans_raw: [N,4,4] 每个管道段的齐次变换矩阵，描述管道段在世界坐标系下的位置和姿态
@@ -17,25 +17,22 @@ def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: to
     return: [P,5] 五维向量，包含以下信息：对应点在对应管段的相对坐标xyz, 轴向距离占比，径向距离占比
     """
     if points.dim() == 1:
-        points = points.unsqueeze(0) 
+        points = points.unsqueeze(0)
 
     device = points.device
     dtype = points.dtype
     num_points = points.size(0)
-    # 存储每个点在在整个管路上的最好匹配径向距离
     best_radial = torch.full((num_points,), float("inf"), dtype=dtype, device=device)
     best_out = torch.zeros((num_points, 5), dtype=dtype, device=device)
 
-    if already_inverted == False:
-        # 如果外部已经预先计算了逆矩阵，则直接使用, 否则在函数内部计算逆矩阵
-        trans_raw = torch.linalg.inv(trans_raw)
+    inv_trans = torch.linalg.inv(trans_raw)
     for i in range(info_raw.size(0)):
-        seg_out = is_point_on_segment(points, trans_raw[i], info_raw[i, :])
+        seg_out = is_point_on_segment(points, inv_trans[i], info_raw[i, :])
         axial = seg_out[:, 3]
         radial = seg_out[:, 4]
-        valid = (axial >= 0.0) & (axial <= 1.0) & (radial >= 1.0) # 结果合法性
+        valid = (axial >= 0.0) & (axial <= 1.0) & (radial >= 1.0)
         better = valid & (radial < best_radial)
-        if better.any(): # 只要better有数据
+        if better.any():
             seg_out = seg_out.clone()
             seg_out[:, 3] = seg_out[:, 3] + i
             best_radial = torch.where(better, radial, best_radial)
@@ -44,7 +41,6 @@ def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: to
     no_hit = torch.isinf(best_radial)
     if no_hit.any():
         best_out = torch.where(no_hit.unsqueeze(1), torch.zeros_like(best_out), best_out)
-        best_out[no_hit, 3] = -1.0
     return best_out
     
     
@@ -116,10 +112,6 @@ SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".
 
 # 测试用主程序
 if __name__ == "__main__":
-    # 选择测试计算设备 (自动优先GPU)
-    test_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # test_device = torch.device("cpu")  # 强制使用CPU进行测试，便于调试和验证结果
-    print(f"[INFO] Test device: {test_device}")
     # * 读取并挂载本轮随机加载的JSON管道描述文件
     if os.path.exists(SELECTED_PIPE_JSON):
         with open(SELECTED_PIPE_JSON, 'r', encoding='utf-8') as f:
@@ -128,52 +120,44 @@ if __name__ == "__main__":
         info_list = [item["info"] for item in raw_data]
         
         # 直接转换为Tensor， PyTorch会自动推断并形成对应形状
-        pipe_transform = torch.tensor(transform_list, dtype=torch.float32, device=test_device)  # [N, 4, 4]
-        pipe_info = torch.tensor(info_list, dtype=torch.float32, device=test_device)            # [N, 6]
+        pipe_transform = torch.tensor(transform_list, dtype=torch.float32)  # [N, 4, 4]
+        pipe_info = torch.tensor(info_list, dtype=torch.float32)            # [N, 6]
         print(f"[INFO] Pipe Transform Tensor Shape: {pipe_transform.shape}")
         print(f"[INFO] Pipe Info Tensor Shape: {pipe_info.shape}")
     else:
         # Shape: [1, 4, 4]
-        pipe_transform = torch.eye(4, device=test_device).unsqueeze(0)
+        pipe_transform = torch.eye(4).unsqueeze(0)  
         # Shape: [1, 6]
-        pipe_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32, device=test_device)
+        pipe_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32) 
         print(f"[WARNING] Could not find JSON info at: {SELECTED_PIPE_JSON}")
     
     # 使用单个管道测试相对坐标转换 (批量形式)
     seg_id = 0
     test_points = torch.tensor(
         [
-            [0.0, 1.2 -1.5, 0.5],
             [0.0, 1.2 + 1.5, 0.5],
             [0.2, 0.4, 0.1],
             [-0.3, 0.8, 0.2],
         ],
         dtype=torch.float32,
-        device=test_device,
     )
-    rand_points = torch.rand((1024, 3), dtype=torch.float32, device=test_device) * 2.0 - 1.0  # [-1, 1]
-    test_points = torch.cat([test_points, rand_points], dim=0)
+    seg_out = is_point_on_segment(test_points, torch.linalg.inv(pipe_transform[seg_id]), pipe_info[seg_id])
+    print("[DEBUG] is_point_on_segment batch output:")
+    print(seg_out)
+
     # 使用整段管道完成主函数测试
-    pipe_transform_inv = torch.linalg.inv(pipe_transform) # 预先计算逆矩阵，减少后续计算量
-    if test_device.type == "cuda":
-        torch.cuda.synchronize()
     t0 = time.perf_counter()
-    result = is_point_on_pipe(test_points, pipe_transform_inv, pipe_info)
-    if test_device.type == "cuda":
-        torch.cuda.synchronize()
+    result = is_point_on_pipe(test_points, pipe_transform, pipe_info)
     t1 = time.perf_counter()
     elapsed_ms = (t1 - t0) * 1000.0
     print(f"[PERF] is_point_on_pipe elapsed: {elapsed_ms:.3f} ms")
     print("\n================= Query Result =================")
     # result = [x_local, y_local, z_local, (seg_id + axis_ratio), radial_ratio]
     for idx in range(test_points.size(0)):
-        if idx >= 5:  # 只打印前5个点的结果，避免过长输出
-            print(f"... (skipping remaining {test_points.size(0) - 5} points) ...")
-            break
         point = test_points[idx]
         out = result[idx]
         print(f"world point            : {point.tolist()}")
-        if out[3].item() < 0.0:
+        if torch.allclose(out, torch.zeros(5, dtype=out.dtype, device=out.device)):
             print("status                 : NOT_ON_PIPE")
             print("segment_id             : -1")
             print("local_xyz              : [0.0, 0.0, 0.0]")

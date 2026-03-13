@@ -50,11 +50,24 @@ def get_imu_lin_acc(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch
     sensor = env.scene.sensors[sensor_cfg.name]
     return sensor.data.lin_acc_b.view(env.num_envs, -1)
     
+def get_contact_force(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """ 返回接触力大小 """
+    sensor = env.scene.sensors[sensor_cfg.name]
+    f = sensor.data.net_forces_w # 常见字段：net_forces_w -> [num_envs, 3]
+    return torch.norm(f, dim=-1, p=2)
+
+def body_quat_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """ 仅返回刚体在世界坐标系下的四元数姿态(wxyz) """
+    asset = env.scene[asset_cfg.name]
+    quat = asset.data.body_quat_w[:, asset_cfg.body_ids]
+    return quat.reshape(env.num_envs, -1)
+
+# ! ================================== 以下内容都是Reward中可能用到的，只在Debug中显示测试 ==================
 def get_relative_pose(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    # * 本函数用于计算输入的刚体body与某个管道元件的相对坐标，返回一个2*4张量
-    # 第一行 [id , x, y, z]是刚体坐标在某个管道元件的ID号以及在管道坐标系下的位置
-    # 第二行 [roll, pitch, yaw, 0]是刚体坐标系相对于管道坐标系的欧拉角表示的姿态（最后一个元素占位）
+    """ 输入一个机器人刚体， 返回它相对于某个具体管道的相对坐标，以及相对姿态 """
+    # 返回Tensor格式： 
     a = 1
+
     
 
 # =============================================================================
@@ -110,39 +123,74 @@ class ObservationsCfg:
                 )            
             }
         )
-        # # todo IMU四元数姿态
-        imu_back_quat = ObsTerm(
-            func = get_imu_orientation,
-            params = {
-                "sensor_cfg": SceneEntityCfg("back_imu")
-            }
+        # ! 暂时弃用IMU了，感觉可以直接从mdp中拿
+        # # # todo IMU四元数姿态
+        # imu_back_quat = ObsTerm(
+        #     func = get_imu_orientation,
+        #     params = {
+        #         "sensor_cfg": SceneEntityCfg("back_imu")
+        #     }
+        # )
+        # imu_front_quat = ObsTerm(
+        #     func = get_imu_orientation,
+        #     params = {
+        #         "sensor_cfg": SceneEntityCfg("front_imu")
+        #     }
+        # )
+        # # # todo IMU线加速度
+        # imu_back_accel = ObsTerm(
+        #     func = get_imu_lin_acc,
+        #     params = {
+        #         "sensor_cfg": SceneEntityCfg("back_imu")
+        #     }
+        # )
+        # imu_front_accel = ObsTerm(
+        #     func = get_imu_lin_acc,
+        #     params = {
+        #         "sensor_cfg": SceneEntityCfg("front_imu")
+        #     }
+        # )
+        # 后部刚体位姿 (世界系): [pos(3), quat(4)]
+        back_body_pose = ObsTerm(
+            func= body_quat_w,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])}
         )
-        imu_front_quat = ObsTerm(
-            func = get_imu_orientation,
-            params = {
-                "sensor_cfg": SceneEntityCfg("front_imu")
-            }
+        # 前部刚体位姿 (世界系): [pos(3), quat(4)]
+        front_body_pose = ObsTerm(
+            func= body_quat_w,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])}
         )
-        # # todo IMU线加速度
-        imu_back_accel = ObsTerm(
-            func = get_imu_lin_acc,
-            params = {
-                "sensor_cfg": SceneEntityCfg("back_imu")
-            }
-        )
-        imu_front_accel = ObsTerm(
-            func = get_imu_lin_acc,
-            params = {
-                "sensor_cfg": SceneEntityCfg("front_imu")
-            }
-        )
-        
-        # # * 重力投影
+        # * 重力投影
         projected_gravity = ObsTerm(
             func = mdp.projected_gravity,
             params={"asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])}
         )
         
+        # * 轮子接触力
+        touch_m1 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_m1")}
+        )
+        touch_m2 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_m2")}
+        )
+        touch_a1 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_a1")}
+        )
+        touch_a2 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_a2")}
+        )
+        touch_a3 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_a3")}
+        )
+        touch_a4 = ObsTerm(
+            func= get_contact_force,
+            params = {"sensor_cfg": SceneEntityCfg("touch_a4")}
+        )
         # # todo 上一帧动作
         # last_action = ObsTerm(
         #     func = mdp.last_action,
@@ -222,5 +270,5 @@ class ObservationsCfg:
     # 注意：SKRL能很好地处理这种字典输入
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
-    critic = CriticCfg()
+    # critic = CriticCfg()
     

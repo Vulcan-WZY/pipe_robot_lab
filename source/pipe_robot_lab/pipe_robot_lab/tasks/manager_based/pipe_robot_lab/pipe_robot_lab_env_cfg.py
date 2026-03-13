@@ -7,7 +7,7 @@ from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.sensors import TiledCameraCfg , ImuCfg
+from isaaclab.sensors import TiledCameraCfg , ImuCfg , ContactSensorCfg
 
 ##
 # Pre-defined configs
@@ -141,15 +141,46 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             clipping_range=(0.1, 10.0), # D435i 有效深度范围
         ),
     )
-    back_imu = ImuCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/BM_03_link_imu",
-        update_period=0.005,           # 200Hz
-    )
-    front_imu = ImuCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/FM_26_link_imu",
-        update_period=0.005,           # 200Hz
-    )
+    # back_imu = ImuCfg(
+    #     prim_path="{ENV_REGEX_NS}/Robot/BM_03_link_imu",
+    #     update_period=0.005,           # 200Hz
+    # )
+    # front_imu = ImuCfg(
+    #     prim_path="{ENV_REGEX_NS}/Robot/FM_26_link_imu",
+    #     update_period=0.005,           # 200Hz
+    # )
 
+    # * 定义一组接触传感器
+    # 后侧主动轮
+    touch_m1 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/BM_08_link",
+        update_period= 0.02,
+    )
+    # 前侧主动轮
+    touch_m2 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/FM_31_link",
+        update_period= 0.02,
+    )
+    # 后侧左辅助轮
+    touch_a1 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/BL_22_link",
+        update_period= 0.02,
+    )
+    # 后侧右辅助轮
+    touch_a2 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/BR_23_link",
+        update_period= 0.02,
+    )
+    # 前侧左辅助轮
+    touch_a3 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/FL_44_link",
+        update_period= 0.02,
+    )
+    # 前侧右辅助轮
+    touch_a4 = ContactSensorCfg(
+        prim_path= "{ENV_REGEX_NS}/Robot/FL_45_link",  # 这里竟然在USD中的名字是FL我难绷
+        update_period= 0.02,
+    )
 ##
 # Environment configuration
 ##
@@ -194,6 +225,7 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
             # 直接转换为Tensor， PyTorch会自动推断并形成对应形状
             self.pipe_transform = torch.tensor(transform_list, dtype=torch.float32)  # [N, 4, 4]
             self.pipe_info = torch.tensor(info_list, dtype=torch.float32)            # [N, 6]
+            self.pipe_transform_inv = torch.linalg.inv(self.pipe_transform) # 预先计算逆矩阵，减少后续计算量
             print(f"[INFO] Pipe Transform Tensor Shape: {self.pipe_transform.shape}")
             print(f"[INFO] Pipe Info Tensor Shape: {self.pipe_info.shape}")
         else:
