@@ -354,7 +354,8 @@ class PiprRobotDemo:
 
                 # 只需要传入组名即可自动切片并打印
                 self._print_observation_group(obs, "policy")
-                self._print_observation_group(obs, "critic")
+                # self._print_observation_group(obs, "critic")
+                self._print_observation_group(obs, "debug")
 
                 # ---------------------------------------------------------
                 # ! 3. 检查 Camera 组 (Dict)

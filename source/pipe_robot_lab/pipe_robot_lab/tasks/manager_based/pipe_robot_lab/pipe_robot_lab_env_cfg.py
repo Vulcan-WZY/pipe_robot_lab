@@ -231,5 +231,9 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         else:
             self.pipe_transform = torch.eye(4).unsqueeze(0)  # Shape: [1, 4, 4]
             self.pipe_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32) # Shape: [1, 6]
+            self.pipe_transform_inv = torch.linalg.inv(self.pipe_transform)
             print(f"[WARNING] Could not find JSON info at: {SELECTED_PIPE_JSON}")
+        
+        # 将 DebugCfg 注册进环境以便测试框架拾取
+        self.observations.debug = ObservationsCfg.DebugCfg()
         

@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-03-02 11:41
 # Author: Vulcan
-# LastEditTime: 2026-03-13 10:47
+# LastEditTime: 2026-03-16 15:24
 # Description: 用于存放一些计算与给定管道进行交互的函数，处理点或机器人与完整管路的关系
 # ==========
 
@@ -9,12 +9,116 @@ import torch
 import math
 import time
 
+import pipe_robot_lab.funcs.pose_utils as pose_utils
+
+def get_target_relative_pose(poses: torch.Tensor, trans_raw: torch.Tensor, info_raw: torch.Tensor, already_inverted = True) -> torch.Tensor:
+    """
+    poses: [num_env, 7]. Pose order is [x,y,z,qw,qx,qy,qz]
+    trans_raw: [N,4,4] 每个管道段的齐次变换矩阵, 描述管道段在世界坐标系下的位置和姿态
+    info_raw: [N,6] 每个管道段的描述参数
+    already_inverted: 输入的管道齐次变换矩阵trans_raw是否已经求过逆
+    return: angle_diffs [num_env, 2] 返回机器人在目标位姿下，分别绕目标坐标系 x 轴和 z 轴的角度差值（弧度）。
+    """
+    device = poses.device
+    dtype = poses.dtype
+    num_envs = poses.size(0)
+    # * 1. 批量获取
+    # tensor的切片索引为左闭右开
+    relative_info = is_point_on_pipe(poses[:, 0:3] , trans_raw, info_raw, already_inverted)
+    # relative_info:  [num_envs , 5]
+    
+    # * 2. 从匹配结果中提取局部坐标与进度, 解析所述的管元以及几何参数
+    local_xyz = relative_info[:,0:3]
+    seg_axis = relative_info[: , 3]
+    # 使用掩码处理未命中管网的情况防止越界
+    valid_mask = seg_axis >= 0.0
+    seg_ids = torch.where(valid_mask, torch.floor(seg_axis), torch.zeros_like(seg_axis)).long()
+    axial_ratio = torch.where(valid_mask, seg_axis - seg_ids, torch.zeros_like(seg_axis))
+    
+    # 批量提取当前环境对应的管元参数
+    matched_env_info = info_raw[seg_ids]
+    type_ids = matched_env_info[:,1].long()
+    L = matched_env_info[:,3]
+    theta = matched_env_info[:,5]
+    
+    # * 3. 计算目标位姿坐标系中的y轴与z轴方向向量(在管元坐标系下)
+    # 类型0: 假设所有输入点匹配到的管元都是直管道
+    y_straight = torch.zeros((num_envs , 3), dtype = dtype, device= device)
+    y_straight[:,1] = 1.0 # 直管段的匹配点方向向量沿管元坐标系y轴
+    z_straight = torch.zeros((num_envs , 3) , dtype= dtype , device= device)
+    z_straight[:, 0] = local_xyz[:,0]
+    z_straight[:, 2] = local_xyz[:,2]
+    
+    # 类型1: 假设所有输入点匹配到的管元都是弯管道
+    theta_p = axial_ratio * theta
+    y_curved = torch.zeros((num_envs , 3) , dtype=dtype , device= device)
+    y_curved[:,1] = torch.cos(theta_p)
+    y_curved[:,2] = torch.sin(theta_p)
+    z_curved = torch.zeros((num_envs , 3) , dtype= dtype , device= device)
+    z_curved[: , 0] = local_xyz[:, 0]
+    z_curved[:,1] = local_xyz[:, 1] - L * torch.sin(theta_p)
+    z_curved[:,2] = local_xyz[:,2] - L * (1.0 - torch.cos(theta_p))
+    
+    # 按照掩码自动区分管元类型进行融合
+    is_straight = (type_ids == 0).unsqueeze(-1)
+    y_axis_target = torch.where(is_straight, y_straight, y_curved)
+    z_axis_target = torch.where(is_straight, z_straight, z_curved)
+    
+    # * 4. 向量归一化, 并通过叉乘得到右手系下的x轴
+    z_norm = torch.norm(z_axis_target , dim = 1, keepdim= True)
+    # 防止出现点精确处在轴心导致的z向量模长为0导致计算爆NaN, 引入一个极小值1e-6
+    z_norm = torch.where(z_norm < 1e-6, torch.ones_like(z_norm)*1e-6, z_norm)
+    z_axis_target = z_axis_target / z_norm    # 除以模长实现归一化
+    
+    # 两种求法的y轴都是单位向量, 不需要再进行归一化了, 直接用叉积求x轴
+    x_axis_target = torch.cross(y_axis_target, z_axis_target, dim = 1)
+    x_norm = torch.norm(x_axis_target, dim = 1, keepdim=True)
+    x_norm = torch.where(x_norm < 1e-6 , torch.ones_like(x_norm) * 1e-6, x_norm)
+    x_axis_target = x_axis_target / x_norm
+    
+    # * 5. 组装目标位姿坐标系, 在局部坐标系下的旋转矩阵
+    # R ^ pipe _ target  (即: \mathcal{P} 系到 管元局部系 的变换矩阵)
+    R_pipe_target = torch.stack([x_axis_target , y_axis_target, z_axis_target], dim = -1)
+    
+    # * 6. 从输入的矩阵编号中截出完整的管元在世界系下的旋转矩阵块
+    trans_env = trans_raw[seg_ids]
+    if already_inverted:
+        # trans_raw 是 (T^W_pipe)^-1 == T^pipe_W
+        R_pipe_W = trans_env[:,0:3,0:3]
+    else:
+        # trans_raw 是 T^W_pipe，转置后得到旋转的逆 (即 R^pipe_W)
+        R_pipe_W = trans_env[:,0:3,0:3].transpose(1, 2)
+    
+    # * 7. 解析四元数得到机器人在世界坐标系的姿态 R ^ W _ robot
+    R_W_robot = pose_utils.quat_wzyz_to_rotmat(poses[:,3:])
+    
+    # * 8. 计算 R ^ pipe_robot (机器人在管元系下的位姿)
+    R_pipe_robot = R_pipe_W @ R_W_robot
+    
+    # * 9. 计算在目标位姿坐标系中, 机器人的相对位姿
+    # R ^ target_robot = (R^pipe_target)^T @ R^pipe_robot
+    # 注意：三维 Tensor 转置必须使用 .transpose(1, 2) 或 .mT，不可直接使用空号 .transpose()
+    R_target_robot = R_pipe_target.transpose(1, 2) @ R_pipe_robot
+    
+    # * 10. 解析最后得到在目标坐标系下的偏差偏角 [num_envs , 2]
+    euler_angles = pose_utils.rotmat_to_euler_xyz(R_target_robot)
+    theta_x = euler_angles[:, 0]
+    theta_z = euler_angles[:, 2]
+    
+    # 构造成 [N, 2] 结果张量
+    angle_diffs = torch.stack([theta_x, theta_z], dim=-1)
+    # 对于脱离管道的不合法点（越界），返回角度差为0.0或不做处理
+    angle_diffs = torch.where(valid_mask.unsqueeze(1), angle_diffs, torch.zeros_like(angle_diffs))
+    return angle_diffs
+
+
 def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: torch.Tensor, already_inverted = True) -> torch.Tensor:
     """
     points: [P,3] 世界坐标系下的点坐标
     trans_raw: [N,4,4] 每个管道段的齐次变换矩阵，描述管道段在世界坐标系下的位置和姿态
     info_raw: [N,6] 每个管道段的描述参数
     return: [P,5] 五维向量，包含以下信息：对应点在对应管段的相对坐标xyz, 轴向距离占比，径向距离占比
+    ###  return: [x_loacal, y_local , z_local, seg_id + axial_ratio, radial_ratio]
     """
     if points.dim() == 1:
         points = points.unsqueeze(0) 

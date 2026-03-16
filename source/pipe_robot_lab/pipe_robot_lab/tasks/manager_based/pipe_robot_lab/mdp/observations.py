@@ -7,6 +7,9 @@ from isaaclab.managers import SceneEntityCfg
 import isaaclab.sim as sim_utils
 import torch
 
+
+import pipe_robot_lab.funcs.pipe_geom_utils as p_geom
+
 def get_depth_image(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, normalize: bool = True) -> torch.Tensor:
     """
     自定义函数：从 TiledCamera 中提取深度图
@@ -62,13 +65,27 @@ def body_quat_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tens
     quat = asset.data.body_quat_w[:, asset_cfg.body_ids]
     return quat.reshape(env.num_envs, -1)
 
-# ! ================================== 以下内容都是Reward中可能用到的，只在Debug中显示测试 ==================
-def get_relative_pose(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """ 输入一个机器人刚体， 返回它相对于某个具体管道的相对坐标，以及相对姿态 """
-    # 返回Tensor格式： 
-    a = 1
 
+
+# ! ================================== 以下内容都是Reward中可能用到的，只在Debug中显示测试 ==================
+def get_pose_error(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    # 1. 解析目标资产的位姿信息 -> [num_envs , 7] (x, y, z, qw, qx, qy, qz)
+    poses = body_quat_w(env, asset_cfg) # 如果后续需要完整的x,y,z请结合mdp.body_pos或者从asset直接取完整pose
+    # 但是 body_quat_w 只有姿态，我们需要完整的 7维 数据:
+    asset = env.scene[asset_cfg.name]
+    positions = asset.data.body_pos_w[:, asset_cfg.body_ids].squeeze(1) # [num_envs, 3]
+    quats = asset.data.body_quat_w[:, asset_cfg.body_ids].squeeze(1)    # [num_envs, 4]
+    full_poses = torch.cat([positions, quats], dim=-1)                  # [num_envs, 7]
     
+    # 2. 从 env 的 cfg 结构中拿到我们在 __post_init__ 中缓存的管道参数属性
+    # 注意：这些属性储存在 env_cfg 也就是 env.cfg 或者我们需要将其挪到 env.scene_cfg 以确保可用。
+    # 这里根据你的 pipe_robot_lab_env_cfg.py，你将它们挂在了 PipeRobotLabEnvCfg (env的配置对象) 上。
+    trans_inv = env.cfg.pipe_transform_inv.to(env.device)
+    info = env.cfg.pipe_info.to(env.device)
+    
+    # 3. 调用算子获取角度误差 (roll, yaw 偏差) -> [num_envs, 2]
+    error = p_geom.get_target_relative_pose(poses=full_poses, trans_raw=trans_inv, info_raw=info, already_inverted=True)
+    return error
 
 # =============================================================================
 # 4. 观测配置 (Observations Configuration)
@@ -256,19 +273,20 @@ class ObservationsCfg:
             self.concatenate_terms = True # 用于配置覆盖父类的设置
             self.enable_corruption = False # Critic 观测通常不加噪声
     
-    # @configclass
-    # class DebugCfg(ObsGroup):
-    #     # 用于调试的观测项， 可以在测试时打印一些状态信息， 但不参与训练
-    #     back_link_pos = ObsTerm(
-    #         func = get_relative_pose,
-    #         params = {
-    #             "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])
-    #         }
-    #     )
+    @configclass
+    class DebugCfg(ObsGroup):
+        # 用于调试的观测项， 可以在测试时打印一些状态信息， 但不参与训练
+        back_link_pose_error = ObsTerm(
+            func = get_pose_error,
+            params = {
+                "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])
+            }
+        )
     
     # 注册到总配置
     # 注意：SKRL能很好地处理这种字典输入
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
     # critic = CriticCfg()
+    debug: DebugCfg = DebugCfg()
     
