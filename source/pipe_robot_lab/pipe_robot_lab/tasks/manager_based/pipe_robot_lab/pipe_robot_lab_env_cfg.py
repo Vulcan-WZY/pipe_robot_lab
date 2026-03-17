@@ -1,7 +1,3 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -15,7 +11,7 @@ from isaaclab.sensors import TiledCameraCfg , ImuCfg , ContactSensorCfg
 from pipe_robot_lab.assets.pipe_robot.pipe_robot_cfg import PIPE_ROBOT_CFG  # isort:skip
 from .mdp.actions import ActionsCfg  
 from .mdp.observations import ObservationsCfg
-from .mdp.rewards import RewardsCfg
+from .mdp.rewards import RewardsCfg 
 from .mdp.events import EventCfg
 from .mdp.terminations import TerminationsCfg
 
@@ -42,10 +38,10 @@ SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".
 ##
 @configclass
 class PipeRobotSceneCfg(InteractiveSceneCfg):
-    # 地面
+    # 地面 (修改: 添加 color 属性以生成纯色地面, 避免试图从AWS下载默认网格USD导致网络报错)
     ground = AssetBaseCfg(
         prim_path="/World/defaultGroundPlane", 
-        spawn=sim_utils.GroundPlaneCfg(),
+        spawn=sim_utils.GroundPlaneCfg(color=(0.1, 0.1, 0.1)),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(0.0, 0.0, -10.0),
             rot=(1.0, 0.0, 0.0, 0.0),
