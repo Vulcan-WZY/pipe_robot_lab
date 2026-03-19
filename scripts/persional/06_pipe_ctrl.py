@@ -311,12 +311,21 @@ class PiprRobotDemo:
             print("[INFO] Environment Reset Triggered.")
 
         count = 0
+        print_interval = 20
+        import time
+        start_time = time.time()
         while simulation_app.is_running():
             actions_list = []
             
             # # * --- Debug: Print cmd_vel periodically to ensure input is received ---
             count += 1
-            if count % 50 == 0:
+            if count % print_interval == 0:
+                current_time = time.time()
+                avg_time = (current_time - start_time) / print_interval
+                fps = 1.0 / avg_time if avg_time > 0 else 0.0
+                print(f"\n[Timing] {print_interval} Frames Avg Time: {avg_time*1000:.2f} ms | FPS: {fps:.1f}")
+                start_time = current_time
+                
                 # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
                 print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
                         f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
@@ -349,7 +358,7 @@ class PiprRobotDemo:
 
             
             # count += 1
-            if count % 50 == 0:
+            if count % print_interval == 0:
                 print(f"[Frame {count}] Observation Debug:")
 
                 # 只需要传入组名即可自动切片并打印

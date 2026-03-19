@@ -57,8 +57,6 @@ def get_target_relative_pose(env, asset_cfg) -> torch.Tensor:
     quats = asset.data.body_quat_w[:, asset_cfg.body_ids].squeeze(1)
     dtype = quats.dtype
     
-    device = quats.device
-    
     trans_raw = env.cfg.pipe_transform_inv.to(device)
     info_raw = env.cfg.pipe_info.to(device)
     already_inverted = True

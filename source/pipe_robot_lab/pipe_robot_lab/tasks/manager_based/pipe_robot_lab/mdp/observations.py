@@ -72,19 +72,10 @@ def get_pose_error(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.T
     # 1. 解析目标资产的位姿信息 -> [num_envs , 7] (x, y, z, qw, qx, qy, qz)
     poses = body_quat_w(env, asset_cfg) # 如果后续需要完整的x,y,z请结合mdp.body_pos或者从asset直接取完整pose
     # 但是 body_quat_w 只有姿态，我们需要完整的 7维 数据:
-    asset = env.scene[asset_cfg.name]
-    positions = asset.data.body_pos_w[:, asset_cfg.body_ids].squeeze(1) # [num_envs, 3]
-    quats = asset.data.body_quat_w[:, asset_cfg.body_ids].squeeze(1)    # [num_envs, 4]
-    full_poses = torch.cat([positions, quats], dim=-1)                  # [num_envs, 7]
-    
-    # 2. 从 env 的 cfg 结构中拿到我们在 __post_init__ 中缓存的管道参数属性
-    # 注意：这些属性储存在 env_cfg 也就是 env.cfg 或者我们需要将其挪到 env.scene_cfg 以确保可用。
-    # 这里根据你的 pipe_robot_lab_env_cfg.py，你将它们挂在了 PipeRobotLabEnvCfg (env的配置对象) 上。
-    trans_inv = env.cfg.pipe_transform_inv.to(env.device)
-    info = env.cfg.pipe_info.to(env.device)
     
     # 3. 调用算子获取角度误差 (roll, yaw 偏差) -> [num_envs, 2]
-    error = p_geom.get_target_relative_pose(poses=full_poses, trans_raw=trans_inv, info_raw=info, already_inverted=True)
+    # 已使用懒加载缓存，直接传入 env 和 asset_cfg 即可
+    error = p_geom.get_target_relative_pose(env, asset_cfg)
     return error
 
 # =============================================================================

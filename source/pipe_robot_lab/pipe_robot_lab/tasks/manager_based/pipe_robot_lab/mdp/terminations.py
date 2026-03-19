@@ -46,15 +46,11 @@ def reach_goal_termination(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) ->
     终点判断终止函数: 提取机器人的特定部位(如前侧基座)在世界下的坐标，
     判断其是否进入了最后一段管道并且行进距离超过了该段的一半。
     """
-    asset = env.scene[asset_cfg.name]
-    # 提取部位的位置坐标 [num_envs, 3]
-    positions = asset.data.body_pos_w[:, asset_cfg.body_ids].squeeze(1)
-    # 提取管道配置参数
-    trans_inv = env.cfg.pipe_transform_inv.to(env.device)
-    info = env.cfg.pipe_info.to(env.device)
-    num_segments = trans_inv.shape[0]  # 一共有几段管元
-    # 调用现有的方法：返回 [num_envs, 5] -> (x_local, y_local, z_local, seg_id + ratio, radial_ratio)
-    out = p_geom.is_point_on_pipe(points=positions, trans_raw=trans_inv, info_raw=info, already_inverted=True)
+    num_segments = env.cfg.pipe_transform_inv.shape[0]  # 一共有几段管元
+    
+    # 调用现有的缓存方法：返回 [num_envs, 5] -> (x_local, y_local, z_local, seg_id + ratio, radial_ratio)
+    out = p_geom.get_cached_pipe_info(env, asset_cfg)
+    
     # 提取进度。有效值中 progress 的整数部分代表走到的管段 index(0-based), 小数部分是占比
     progress = out[:, 3]
     # 触发重置的阈值：到达最后一段 (num_segments - 1) 的给定比例以上, 即 num_segments - 0.5
