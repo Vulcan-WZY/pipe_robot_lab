@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-03-18 11:25
+# LastEditTime: 2026-03-22 19:32
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -41,6 +41,7 @@ def axial_progress_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> 
     # 4. 更新历史最大里程
     env.max_pipe_progress = torch.max(env.max_pipe_progress, current_progress)
     
+    # 相当于奖励是与历史最大值的差值
     return reward.view(env.num_envs)
 
 def conditional_posture_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sensor_cfgs: list[SceneEntityCfg]) -> torch.Tensor:

@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-03-02 11:41
 # Author: Vulcan
-# LastEditTime: 2026-03-16 15:24
+# LastEditTime: 2026-03-19 12:58
 # Description: 用于存放一些计算与给定管道进行交互的函数，处理点或机器人与完整管路的关系
 # ==========
 
@@ -158,7 +158,8 @@ def is_point_on_pipe(points: torch.Tensor, trans_raw: torch.Tensor, info_raw: to
     trans_raw: [N,4,4] 每个管道段的齐次变换矩阵，描述管道段在世界坐标系下的位置和姿态
     info_raw: [N,6] 每个管道段的描述参数
     return: [P,5] 五维向量，包含以下信息：对应点在对应管段的相对坐标xyz, 轴向距离占比，径向距离占比
-    ###  return: [x_loacal, y_local , z_local, seg_id + axial_ratio, radial_ratio]
+    return: [x_loacal, y_local , z_local, seg_id + axial_ratio, radial_ratio]
+    如果找不到相匹配的管元，则对应的id会被置为-1
     """
     if points.dim() == 1:
         points = points.unsqueeze(0) 

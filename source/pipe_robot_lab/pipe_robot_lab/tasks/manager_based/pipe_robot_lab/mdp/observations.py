@@ -278,6 +278,6 @@ class ObservationsCfg:
     # 注意：SKRL能很好地处理这种字典输入
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
-    # critic = CriticCfg()
+    critic = CriticCfg()
     debug: DebugCfg = DebugCfg()
     

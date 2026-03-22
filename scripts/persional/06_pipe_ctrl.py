@@ -44,35 +44,34 @@ class PiprRobotDemo:
         )
 
         # --- 控制指令状态 (Command States) ---
-        # 基础速度 [Vx, Vy]
+        # 基础速度 [Vx, Vy], 归一化输入 [-1, 1], 用于模拟 RL 网络的第一、第二位输出
         self.cmd_vel = [0.0, 0.0] 
-        # 最大线速度 m/s
-        self.max_speed = 0.4 
+        
         # 摇杆状态跟踪 (处理独立轴事件)
         self.stick_val = {
             "UP": 0.0, "DOWN": 0.0,
             "LEFT": 0.0, "RIGHT": 0.0
         }
-        # 关节位置状态 (弧度)
+        # 关节位置状态, 全部采用归一化 [-1, 1], 用于模拟 RL 网络动作输出
         self.cmd_pos = {
-            "pipe_dia_01": 0.8, # 后小臂 (Mid)
-            "pipe_dia_02": 0.8, # 前小臂 (Mid)
+            "pipe_dia_01": 0.0, # 后小臂 (Mid) 0对应默认中位(offset)
+            "pipe_dia_02": 0.0, # 前小臂 (Mid)
             "up_arms_01":  0.0, # 后大臂 (Up)
             "up_arms_02":  0.0, # 前大臂 (Up)
             "bend_01":     0.0, # 后弯折
             "bend_02":     0.0, # 前弯折
         }
         self.cmd_pos_limits = {
-            "pipe_dia_01": (-0.488692, 1.274090),
-            "pipe_dia_02": (-0.488692, 1.274090),
-            "up_arms_01":  (-0.6, 0.5),
-            "up_arms_02":  (-0.6, 0.5),
-            "bend_01":     (-0.488692, 1.047197533),
-            "bend_02":     (-0.488692, 1.047197533),
+            "pipe_dia_01": (-1.0, 1.0),
+            "pipe_dia_02": (-1.0, 1.0),
+            "up_arms_01":  (-1.0, 1.0),
+            "up_arms_02":  (-1.0, 1.0),
+            "bend_01":     (-1.0, 1.0),
+            "bend_02":     (-1.0, 1.0),
         }
-        # 步进角度 (弧度)
-        self.step_small = math.radians(3.0)
-        self.step_large = math.radians(5.0)
+        # 增加步进响应映射(每次按键操作改变归一化数值的量)
+        self.step_small = 0.05
+        self.step_large = 0.1
 
         # 重置标志
         self.needs_reset = False
@@ -111,11 +110,11 @@ class PiprRobotDemo:
                 if name == "LEFT_STICK_LEFT":  self.stick_val["LEFT"] = stick_v
                 if name == "LEFT_STICK_RIGHT": self.stick_val["RIGHT"] = stick_v
                 
-                # 合成速度
+                # 合成速度, 归一化输入范围 [-1, 1]
                 # Y轴 (前后): UP(+) / DOWN(-) -> 机器人 Y+ 是前进
-                self.cmd_vel[1] = (self.stick_val["UP"] - self.stick_val["DOWN"]) * self.max_speed
+                self.cmd_vel[1] = (self.stick_val["UP"] - self.stick_val["DOWN"])
                 # X轴 (左右): LEFT(+) / RIGHT(-) -> 机器人 X+ 是右移
-                self.cmd_vel[0] = (self.stick_val["RIGHT"] - self.stick_val["LEFT"]) * self.max_speed
+                self.cmd_vel[0] = (self.stick_val["RIGHT"] - self.stick_val["LEFT"])
 
             # -------------------------------------------------
             # * 2. 按钮触发离散动作
@@ -167,15 +166,15 @@ class PiprRobotDemo:
             # 1. 移动 (WASD Full Speed)
             if event.input == carb.input.KeyboardInput.W:
                 self.cmd_vel[0] = 0.0  # 覆盖X轴，防止冲突
-                self.cmd_vel[1] = self.max_speed
+                self.cmd_vel[1] = 1.0  # 归一化输入范围 [-1, 1]
             elif event.input == carb.input.KeyboardInput.S:
                 self.cmd_vel[0] = 0.0  # 覆盖X轴，防止冲突
-                self.cmd_vel[1] = -self.max_speed
+                self.cmd_vel[1] = -1.0 # 归一化输入范围 [-1, 1]
             elif event.input == carb.input.KeyboardInput.A:
-                self.cmd_vel[0] = -self.max_speed
+                self.cmd_vel[0] = -1.0 # 归一化输入范围 [-1, 1]
                 self.cmd_vel[1] = 0.0  # 覆盖Y轴，防止冲突
             elif event.input == carb.input.KeyboardInput.D:
-                self.cmd_vel[0] = self.max_speed
+                self.cmd_vel[0] = 1.0  # 归一化输入范围 [-1, 1]
                 self.cmd_vel[1] = 0.0  # 覆盖Y轴，防止冲突
 
             # 2. 后侧小臂 (U/I)

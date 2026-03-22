@@ -206,7 +206,7 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings
-        self.sim.dt = 1 / 120
+        self.sim.dt = 1 / 100
         self.sim.render_interval = self.decimation
         
         self.sim.physx.bounce_threshold_velocity = 0.2

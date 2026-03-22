@@ -13,6 +13,19 @@ import isaaclab.envs.mdp as mdp
 MAIN_WHEEL_R    = 0.05 # 主轮半径 (米), 直径100mm
 ASSIST_WHEEL_R  = 0.03 # 辅助轮半径 (米)，直径60mm
 
+# ! 配置训练过程中关于仿真模型的一些运动性能规定
+MAX_LINE_SPEED = 0.4 # 机器人轮胎最大线速度 unit: m/s
+
+UP_ARM_SCALE = 0.55         # lower="-0.6" upper="0.5"
+MID_ARM_SCALE = 0.881391  # 根据URDF文件中配置的上下限得到的缩放振幅
+BEND_SCALE = 0.7679447665 # lower="-0.488692"  upper="1.047197533"
+
+# ! 人工配置动作映射的固定偏置（基于限位中值解算，解耦与初始化姿态的关系）
+UP_ARM_OFFSET = -0.05
+MID_ARM_OFFSET = 0.392699
+BEND_OFFSET = 0.2792527665
+
+
 @configclass
 class LinkedArmActionCfg(mdp.JointPositionActionCfg):
     """Configuration for LinkedArmAction."""
@@ -43,7 +56,7 @@ class LinkedArmAction(mdp.JointPositionAction):
         # 存储tail_arm关节的索引
         self.tail_joint_idxs = torch.tensor(tail_joint_names, device=env.device, dtype=torch.int32)
         # mid_arm索引存储在 self._joint_ids (基类处理)
-        print(f"[INFO] LinkedArmAction: {len(self._joint_ids)} mid_arms -> {len(self.tail_joint_idxs)} tail_arms")
+        # print(f"[INFO] LinkedArmAction: {len(self._joint_ids)} mid_arms -> {len(self.tail_joint_idxs)} tail_arms")
 
         # 注意: 如果 _joint_ids 是 tensor，需先转为 list
         mid_ids_list = self._joint_ids.tolist() if isinstance(self._joint_ids, torch.Tensor) else self._joint_ids
@@ -52,10 +65,10 @@ class LinkedArmAction(mdp.JointPositionAction):
         mid_names = [asset.joint_names[i] for i in mid_ids_list]
         tail_names = [asset.joint_names[i] for i in tail_ids_list]
         
-        print(f"[INFO] LinkedArmAction Pairing Check ({len(mid_names)} pairs):")
+        # print(f"[INFO] LinkedArmAction Pairing Check ({len(mid_names)} pairs):")
         # 打印配对情况，便于用户检查是否错位（如 mid_arm_01 对应到了 tail_arm_02）
-        for i, (m, t) in enumerate(zip(mid_names, tail_names)):
-            print(f"  Pair {i:02d}: {m:<30} --> {t}")
+        # for i, (m, t) in enumerate(zip(mid_names, tail_names)):
+        #     print(f"  Pair {i:02d}: {m:<30} --> {t}")
         
         if len(mid_names) != len(tail_names):
                 print(f"[WARNING] LinkedArmAction: Mismatch in number of joints! Mid: {len(mid_names)}, Tail: {len(tail_names)}")
@@ -121,8 +134,8 @@ class SteerWheelAction(mdp.JointVelocityAction):
         wheel_ids = self._joint_ids.tolist() if isinstance(self._joint_ids, torch.Tensor) else self._joint_ids
         steer_ids = self.steer_joint_idxs.tolist() if isinstance(self.steer_joint_idxs, torch.Tensor) else self.steer_joint_idxs
         
-        print(f"[DEBUG] SteerWheelAction Init: WheelPattern={cfg.joint_names}, SteerPattern={cfg.steer_joint_names}")
-        print(f"        -> Found Wheels: {wheel_ids}, Steers: {steer_ids}")
+        # print(f"[DEBUG] SteerWheelAction Init: WheelPattern={cfg.joint_names}, SteerPattern={cfg.steer_joint_names}")
+        # print(f"        -> Found Wheels: {wheel_ids}, Steers: {steer_ids}")
         
         if len(wheel_ids) == 0:
             print(f"[ERROR] No WHEEL joints found matching {cfg.joint_names}")
@@ -142,8 +155,8 @@ class SteerWheelAction(mdp.JointVelocityAction):
         wheel_names = [asset.joint_names[i] for i in wheel_ids]
         steer_names = [asset.joint_names[i] for i in steer_ids]
         
-        if len(wheel_names) > 0 and len(steer_names) > 0:
-            print(f"[INFO] SteerWheelAction Unit: {wheel_names[0]} <--> {steer_names[0]}")
+        # if len(wheel_names) > 0 and len(steer_names) > 0:
+        #     print(f"[INFO] SteerWheelAction Unit: {wheel_names[0]} <--> {steer_names[0]}")
 
     @property
     def action_dim(self):
@@ -238,37 +251,37 @@ class ActionsCfg:
         joint_names=[".*assist_wheel_01"],        # 左后辅助轮
         steer_joint_names=[".*assist_steer_01"],  # 左后辅助轮舵向
         # 通过scale将线速度转换为角速度： wheel_ang_vel = line_vel / wheel_radius
-        scale=1.0 / ASSIST_WHEEL_R,
+        scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
     )
     steer_wheel_02 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_02"],        # 右后辅助轮
         steer_joint_names=[".*assist_steer_02"],  # 右后辅助轮
-        scale=1.0 / ASSIST_WHEEL_R,
+        scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
     )
     steer_wheel_03 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*main_wheel_01"],          # 中后主动轮
         steer_joint_names=[".*main_steer_01"],    # 中后主动轮舵向
-        scale=1.0 / MAIN_WHEEL_R,
+        scale = MAX_LINE_SPEED / MAIN_WHEEL_R,
     )
     steer_wheel_04 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_03"],          # 左前辅助轮
         steer_joint_names=[".*assist_steer_03"],    # 左前辅助轮
-        scale=1.0 / ASSIST_WHEEL_R,
+        scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
     )
     steer_wheel_05 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_04"],          # 右前辅助轮
         steer_joint_names=[".*assist_steer_04"],    # 右前辅助轮
-        scale=1.0 / ASSIST_WHEEL_R,
+        scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
     )
     steer_wheel_06 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*main_wheel_02"],          # 中前主动轮
         steer_joint_names=[".*main_steer_02"],    # 中前主动轮
-        scale=1.0 / MAIN_WHEEL_R,
+        scale = MAX_LINE_SPEED / MAIN_WHEEL_R,
     )
     # -------------------------------------------------------------------------
     # ! 机械臂与弯折 (Manipulators)
@@ -279,42 +292,42 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=["mid_arm_01", "mid_arm_02"],
         tail_joint_names=["tail_arm_01", "tail_arm_02"],
-        scale=1.0,
-        use_default_offset=True,
+        scale = MID_ARM_SCALE,
+        offset = MID_ARM_OFFSET,
     )
     # 前侧两组联动臂
     pipe_dia_02 = LinkedArmActionCfg(
         asset_name="robot",
         joint_names=["mid_arm_03", "mid_arm_04"],
         tail_joint_names=["tail_arm_03", "tail_arm_04"],
-        scale=1.0,
-        use_default_offset=True,
+        scale = MID_ARM_SCALE,
+        offset = MID_ARM_OFFSET,
     )
     # * 两组大臂控制 实际控制关节数量: 2 * 2 = 4
     up_arms_01 = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*up_arm_01", ".*up_arm_02"],
-        scale=1.0,
-        use_default_offset=True, 
+        scale = UP_ARM_SCALE,
+        offset = UP_ARM_OFFSET, 
     )
     up_arms_02 = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*up_arm_03", ".*up_arm_04"],
-        scale=1.0,
-        use_default_offset=True, 
+        scale = UP_ARM_SCALE,
+        offset = UP_ARM_OFFSET, 
     )
     # * 机身弯折控制
     bend_01 = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["bend_01"],
-        scale=1.0,
-        use_default_offset=True,
+        scale = BEND_SCALE,
+        offset = BEND_OFFSET,
     )
     bend_02 = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["bend_02"],
-        scale=1.0,
-        use_default_offset=True,
+        scale = BEND_SCALE,
+        offset = BEND_OFFSET,
     )
     # =============================================================================
 
