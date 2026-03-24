@@ -61,8 +61,8 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
-# always enable cameras to record video
-if args_cli.video:
+# enable camera rendering for vision-based tasks (required by tiled cameras)
+if hasattr(args_cli, "enable_cameras"):
     args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra
@@ -81,6 +81,7 @@ import random
 import time
 from datetime import datetime
 from packaging import version
+from collections import OrderedDict
 
 import skrl
 
@@ -95,6 +96,8 @@ if version.parse(skrl.__version__) < version.parse(SKRL_VERSION):
 
 if args_cli.ml_framework.startswith("torch"):
     from skrl.utils.runner.torch import Runner
+    from skrl.envs.wrappers.torch.base import Wrapper
+    from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
 elif args_cli.ml_framework.startswith("jax"):
     from skrl.utils.runner.jax import Runner
 
@@ -118,6 +121,75 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 logger = logging.getLogger(__name__)
 
 import pipe_robot_lab.tasks  # noqa: F401
+
+
+class VisionIsaacLabWrapper(Wrapper):
+    """SKRL wrapper that keeps multimodal observations (camera/policy/critic)."""
+
+    def __init__(self, env):
+        super().__init__(env)
+        self._reset_once = True
+        self._observations = None
+        self._info = {}
+
+        try:
+            base_space = self._unwrapped.single_observation_space
+        except Exception:
+            base_space = self._unwrapped.observation_space
+
+        if hasattr(base_space, "spaces"):
+            base_spaces = base_space.spaces
+        elif isinstance(base_space, dict):
+            base_spaces = base_space
+        else:
+            base_spaces = {"policy": base_space}
+
+        self._obs_keys = [k for k in ["camera", "policy", "critic"] if k in base_spaces]
+        if not self._obs_keys and "policy" in base_spaces:
+            self._obs_keys = ["policy"]
+
+        self._observation_space = gym.spaces.Dict(OrderedDict((k, base_spaces[k]) for k in self._obs_keys))
+
+    @property
+    def state_space(self):
+        return None
+
+    @property
+    def observation_space(self):
+        return self._observation_space
+
+    @property
+    def action_space(self):
+        try:
+            return self._unwrapped.single_action_space
+        except Exception:
+            return self._unwrapped.action_space
+
+    def _extract_observations(self, observations):
+        if isinstance(observations, dict):
+            return {k: observations[k] for k in self._obs_keys if k in observations}
+        return observations
+
+    def step(self, actions):
+        actions = unflatten_tensorized_space(self.action_space, actions)
+        observations, reward, terminated, truncated, self._info = self._env.step(actions)
+        obs_selected = self._extract_observations(observations)
+        self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
+        return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
+
+    def reset(self):
+        if self._reset_once:
+            observations, self._info = self._env.reset()
+            obs_selected = self._extract_observations(observations)
+            self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
+            self._reset_once = False
+        return self._observations, self._info
+
+    def render(self, *args, **kwargs):
+        return None
+
+    def close(self):
+        self._env.close()
 
 # config shortcuts
 if args_cli.agent is None:
@@ -217,11 +289,46 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     start_time = time.time()
 
-    # wrap around environment for skrl
-    env = SkrlVecEnvWrapper(env, ml_framework=args_cli.ml_framework)  # same as: `wrap_env(env, wrapper="auto")`
+    # 如果使用自定义多模态模型，需要保留 camera/policy/critic 三组观测
+    using_custom_models = not agent_cfg.get("models", {})
+    if using_custom_models and args_cli.ml_framework.startswith("torch"):
+        env = VisionIsaacLabWrapper(env)
+        print(f"[INFO] Environment wrapper: VisionIsaacLabWrapper (obs keys: {env._obs_keys})")
+    else:
+        # 默认包装器会将观测压缩到 policy 组
+        env = SkrlVecEnvWrapper(env, ml_framework=args_cli.ml_framework)  # same as: `wrap_env(env, wrapper="auto")`
 
     # configure and instantiate the skrl runner
     # https://skrl.readthedocs.io/en/latest/api/utils/runner.html
+    
+    # === [Custom Model Injection] ===
+    # 判断是否使用了非空 models 配置 (也就是原版的默认自动构建)
+    # 如果为空 (models: {})，则我们手动实例化多模态神经网络并注入 agent_cfg 中
+    if not agent_cfg.get("models", {}):
+        print("[INFO] Injecting custom multimodal CNN+MLP model...")
+        from pipe_robot_lab.tasks.manager_based.pipe_robot_lab.agents.models.custom_skrl_model import CustomActor, CustomCritic
+
+        # Runner 需要 models 配置字典 (而不是模型实例)，因此为自定义类注册组件解析
+        _original_component = Runner._component
+
+        def _custom_component(self, name: str):
+            lowered = name.lower()
+            if lowered == "customactor":
+                return CustomActor
+            if lowered == "customcritic":
+                return CustomCritic
+            return _original_component(self, name)
+
+        Runner._component = _custom_component
+
+        # 使用 Runner 支持的配置形式，让其自动实例化 policy / value
+        agent_cfg["models"] = {
+            "separate": True,
+            "policy": {"class": "CustomActor"},
+            "value": {"class": "CustomCritic"},
+        }
+    # ==================================
+
     runner = Runner(env, agent_cfg)
 
     # load checkpoint (if specified)

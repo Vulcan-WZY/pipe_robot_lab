@@ -12,6 +12,7 @@
 # 常用调试指令
 
 - 启动Demo程序并打开相机：`python ./06_pipe_ctrl.py --enable_cameras`
+- 开启tensorboard查看训练过程: tensorboard --logdir logs/skrl/pipe_robot_vision_ppo --port 6006'
 
 # 仓库部署流程
 

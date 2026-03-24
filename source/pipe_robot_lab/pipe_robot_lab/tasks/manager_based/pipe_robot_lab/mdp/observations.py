@@ -53,11 +53,14 @@ def get_imu_lin_acc(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch
     sensor = env.scene.sensors[sensor_cfg.name]
     return sensor.data.lin_acc_b.view(env.num_envs, -1)
     
-def get_contact_force(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """ 返回接触力大小 """
+def get_contact_state(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float = 1.0) -> torch.Tensor:
+    """ 返回布尔式的接触状态：1表示接触(力>阈值)，-1表示未接触 """
     sensor = env.scene.sensors[sensor_cfg.name]
     f = sensor.data.net_forces_w # 常见字段：net_forces_w -> [num_envs, 3]
-    return torch.norm(f, dim=-1, p=2)
+    force_mag = torch.norm(f, dim=-1, p=2)
+    # 当力大于阈值时，认为是1.0，否则为-1.0
+    state = torch.where(force_mag > threshold, torch.tensor(1.0, device=env.device), torch.tensor(-1.0, device=env.device))
+    return state.view(env.num_envs, 1)
 
 def body_quat_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """ 仅返回刚体在世界坐标系下的四元数姿态(wxyz) """
@@ -88,25 +91,36 @@ class ObservationsCfg:
         # # todo 数值空间观测
         # 观测所有主动轮和辅助轮的舵角方向
         steer_pos = ObsTerm(
-            func = mdp.joint_pos, # 关节归一化位置
+            func = mdp.joint_pos_limit_normalized, # <- 改为归一化位置
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*main_steer_.*", ".*assist_steer_.*"]
                 )            
             }
         )
-        # 观测所有主动轮和辅助轮的轮速
-        wheel_vel = ObsTerm(
-            func= mdp.joint_vel, # 先使用真实速度
+        # 观测主轮轮速（角速度 * (R / MaxSpeed) 映射回 [-1, 1] 对应的线速度百分比）
+        main_wheel_vel = ObsTerm(
+            func= mdp.joint_vel,
+            scale= 0.05 / 0.4, # MAIN_WHEEL_R / MAX_LINE_SPEED = 0.125
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
-                    joint_names=[".*main_steer_.*", ".*assist_steer_.*"]
+                    joint_names=[".*main_wheel_.*"]
+                )            
+            }
+        )
+        # 观测辅助轮轮速（角速度 * (r / MaxSpeed) 映射回 [-1, 1] 对应的线速度百分比）
+        assist_wheel_vel = ObsTerm(
+            func= mdp.joint_vel,
+            scale= 0.03 / 0.4, # ASSIST_WHEEL_R / MAX_LINE_SPEED = 0.075
+            params= {
+                "asset_cfg": SceneEntityCfg("robot",
+                    joint_names=[".*assist_wheel_.*"]
                 )            
             }
         )
         # # 观测变形推杆位置
         bend_pos = ObsTerm(
-            func = mdp.joint_pos, # 关节位置
+            func = mdp.joint_pos_limit_normalized, # <- 改为归一化位置
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*bend_.*"]
@@ -124,7 +138,8 @@ class ObservationsCfg:
         )
         # 观测所有大臂up_arm力矩
         arm_torque = ObsTerm(
-            func = mdp.joint_effort, # 关节归一化力矩
+            func = mdp.joint_effort, 
+            scale= 0.05, # 通过 scale 将力矩转换到接近 [-1, 1] 的网络友好范围
             params= {
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*up_arm_.*"]
@@ -132,6 +147,7 @@ class ObservationsCfg:
             }
         )
         # ! 暂时弃用IMU了，感觉可以直接从mdp中拿
+        """
         # # # todo IMU四元数姿态
         # imu_back_quat = ObsTerm(
         #     func = get_imu_orientation,
@@ -158,6 +174,7 @@ class ObservationsCfg:
         #         "sensor_cfg": SceneEntityCfg("front_imu")
         #     }
         # )
+        """
         # 后部刚体位姿 (世界系): [pos(3), quat(4)]
         back_body_pose = ObsTerm(
             func= body_quat_w,
@@ -174,35 +191,55 @@ class ObservationsCfg:
             params={"asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])}
         )
         
-        # * 轮子接触力
+        # * 轮子接触状态 (输出 1 或 -1)
         touch_m1 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_m1")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_m1"),
+                "threshold": 1.0 # 1 牛顿以上的受力即视为接触
+            }
         )
         touch_m2 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_m2")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_m2"),
+                "threshold": 1.0
+            }
         )
         touch_a1 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_a1")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_a1"),
+                "threshold": 1.0
+            }
         )
         touch_a2 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_a2")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_a2"),
+                "threshold": 1.0
+            }
         )
         touch_a3 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_a3")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_a3"),
+                "threshold": 1.0
+            }
         )
         touch_a4 = ObsTerm(
-            func= get_contact_force,
-            params = {"sensor_cfg": SceneEntityCfg("touch_a4")}
+            func= get_contact_state,
+            params = {
+                "sensor_cfg": SceneEntityCfg("touch_a4"),
+                "threshold": 1.0
+            }
         )
-        # # todo 上一帧动作
-        # last_action = ObsTerm(
-        #     func = mdp.last_action,
-        # )
+        # 历史动作序列 (提供过去连续 5 步的期望指令)
+        # 这有助于网络理解驱动延迟、阻力和机械惯性
+        last_action = ObsTerm(
+            func = mdp.last_action,
+            history_length=5
+        )
         
         def __post_init__(self):
             # 计算观测维度
@@ -244,6 +281,7 @@ class ObservationsCfg:
         
         
     @configclass
+    # 采用AAC非对称架构, 可以给Critic一些真机拿不到但训练时有用的观测项
     class CriticCfg(PolicyCfg):
         # Critic 观测：关节位置、速度和末端位姿
         back_link_vel = ObsTerm(
@@ -279,5 +317,5 @@ class ObservationsCfg:
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
     critic = CriticCfg()
-    debug: DebugCfg = DebugCfg()
+    # debug: DebugCfg = DebugCfg()
     

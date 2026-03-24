@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-03-22 19:32
+# LastEditTime: 2026-03-23 13:38
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -88,7 +88,7 @@ class RewardsCfg:
     progress_reward = RewTerm(
         func=axial_progress_reward,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])},
-        weight=100.0  # 假设总管段长度为10节，每走一节给100分，可自行缩放
+        weight=10.0  # 假设总管段长度为10节，每走一节给100分，可自行缩放
     )
     
     # 时间流逝惩罚 (让其尽量少花时间)

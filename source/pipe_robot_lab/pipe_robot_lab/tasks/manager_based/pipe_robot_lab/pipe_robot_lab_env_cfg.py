@@ -193,9 +193,9 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
-    # 新增字段：用于存储当前管道的详细参数
-    pipe_transform: torch.Tensor = None  # 存储每个管道元件的齐次变换矩阵，大小为 [N,4,4]，其中 N 是管道段数
-    pipe_info: torch.Tensor = None       # 存储每个管道元件的描述参数，大小为[N , 6]
+    # 新增字段：用于存储当前管道的详细参数 (在__post_init__中动态挂载，不写类型注解防止OmegaConf试图解析Tensor引发崩溃)
+    # 本来是: pipe_transform: torch.Tensor = None
+    # 本来是: pipe_info: torch.Tensor = None
     
     # Post initialization
     def __post_init__(self) -> None:
@@ -218,18 +218,24 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
             transform_list = [item["transform"] for item in raw_data]
             info_list = [item["info"] for item in raw_data]
             
-            # 直接转换为Tensor， PyTorch会自动推断并形成对应形状
-            self.pipe_transform = torch.tensor(transform_list, dtype=torch.float32)  # [N, 4, 4]
-            self.pipe_info = torch.tensor(info_list, dtype=torch.float32)            # [N, 6]
-            self.pipe_transform_inv = torch.linalg.inv(self.pipe_transform) # 预先计算逆矩阵，减少后续计算量
-            print(f"[INFO] Pipe Transform Tensor Shape: {self.pipe_transform.shape}")
-            print(f"[INFO] Pipe Info Tensor Shape: {self.pipe_info.shape}")
+            # 注意: OmegaConf 不支持 Tensor 作为配置值，因此这里存储为可序列化的 list。
+            transform_tensor = torch.tensor(transform_list, dtype=torch.float32)  # [N, 4, 4]
+            info_tensor = torch.tensor(info_list, dtype=torch.float32)            # [N, 6]
+            transform_inv_tensor = torch.linalg.inv(transform_tensor)
+
+            self.pipe_transform = transform_tensor.tolist()
+            self.pipe_info = info_tensor.tolist()
+            self.pipe_transform_inv = transform_inv_tensor.tolist()
+            print(f"[INFO] Pipe Transform Tensor Shape: {transform_tensor.shape}")
+            print(f"[INFO] Pipe Info Tensor Shape: {info_tensor.shape}")
         else:
-            self.pipe_transform = torch.eye(4).unsqueeze(0)  # Shape: [1, 4, 4]
-            self.pipe_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32) # Shape: [1, 6]
-            self.pipe_transform_inv = torch.linalg.inv(self.pipe_transform)
+            default_transform = torch.eye(4).unsqueeze(0)  # Shape: [1, 4, 4]
+            default_info = torch.tensor([[0, 0, 0.36, 1.0, 0.0, 0.0]], dtype=torch.float32) # Shape: [1, 6]
+            self.pipe_transform = default_transform.tolist()
+            self.pipe_info = default_info.tolist()
+            self.pipe_transform_inv = torch.linalg.inv(default_transform).tolist()
             print(f"[WARNING] Could not find JSON info at: {SELECTED_PIPE_JSON}")
         
         # 将 DebugCfg 注册进环境以便测试框架拾取
-        self.observations.debug = ObservationsCfg.DebugCfg()
+        # self.observations.debug = ObservationsCfg.DebugCfg()
         

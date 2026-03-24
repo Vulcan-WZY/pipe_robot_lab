@@ -1,0 +1,71 @@
+#
+# @Date: 2026-03-23 13:59
+# @Author: Vulcan
+# @LastEditTime: 2026-03-23 14:20
+# @Description: 
+#
+
+seed: 42
+
+# models: {}
+
+
+# Rollout memory
+# https://skrl.readthedocs.io/en/latest/api/memories/random.html
+memory:
+  class: RandomMemory
+  memory_size: -1  # automatically determined (same as agent:rollouts)
+
+
+# PPO agent configuration
+# https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
+agent:
+  class: PPO
+  rollouts: 32 # 指每次更新前从环境收集的数据步数 (因为有 CNN 占据显存，这个数字不敢太大)
+  learning_epochs: 5 # 强化学习在同批次数据上优化多少遍
+  mini_batches: 4 
+  discount_factor: 0.99
+  lambda: 0.95
+  # **由于加入了 CNN (多模态），学习率初期一定不能像以前纯 MLP 那么奔放！**
+  # 这里由 1e-3 调小到 5e-4 或 1e-4 是稳妥的做法。
+  learning_rate: 1.0e-4
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.008
+  
+  # 因为我们现在输入是字典，SKRL的默认预处理器有时会吃瘪。暂设 null 
+  state_preprocessor: null
+  state_preprocessor_kwargs: null
+  
+  # 价值预处理开着是有好处的(稳定 Critic)
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  
+  # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
+  entropy_loss_scale: 0.01 
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: False
+  
+  # logging and checkpoint
+  experiment:
+    directory: "pipe_robot_vision_ppo"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+
+# Sequential trainer
+trainer:
+  class: SequentialTrainer
+  # 跑 4800 次 rollouts * 32 = 十多万步的小型测试
+  timesteps: 48000 
+  environment_info: log

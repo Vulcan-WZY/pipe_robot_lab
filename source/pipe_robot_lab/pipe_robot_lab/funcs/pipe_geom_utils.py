@@ -35,8 +35,8 @@ def get_cached_pipe_info(env, asset_cfg) -> torch.Tensor:
     if cache_key in env._pipe_state_cache["data"]:
         return env._pipe_state_cache["data"][cache_key] 
         
-    trans_inv = env.cfg.pipe_transform_inv.to(env.device)
-    info = env.cfg.pipe_info.to(env.device)
+    trans_inv = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=env.device)
+    info = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=env.device)
     
     out = is_point_on_pipe(positions, trans_inv, info, already_inverted=True)
     env._pipe_state_cache["data"][cache_key] = out
@@ -59,8 +59,8 @@ def get_target_relative_pose(env, asset_cfg) -> torch.Tensor:
     
     device = quats.device
     
-    trans_raw = env.cfg.pipe_transform_inv.to(device)
-    info_raw = env.cfg.pipe_info.to(device)
+    trans_raw = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=device)
+    info_raw = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=device)
     already_inverted = True
 
     # * 1. 批量获取 (使用缓存的相对坐标进度信息)
