@@ -1,10 +1,3 @@
-#
-# @Date: 2026-03-23 13:59
-# @Author: Vulcan
-# @LastEditTime: 2026-03-23 14:20
-# @Description: 
-#
-
 seed: 42
 
 # models: {}
@@ -13,59 +6,59 @@ seed: 42
 # Rollout memory
 # https://skrl.readthedocs.io/en/latest/api/memories/random.html
 memory:
-  class: RandomMemory
-  memory_size: -1  # automatically determined (same as agent:rollouts)
+    class: RandomMemory
+    memory_size: -1  # automatically determined (same as agent:rollouts)
 
 
 # PPO agent configuration
 # https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
 agent:
-  class: PPO
-  rollouts: 32 # 指每次更新前从环境收集的数据步数 (因为有 CNN 占据显存，这个数字不敢太大)
-  learning_epochs: 5 # 强化学习在同批次数据上优化多少遍
-  mini_batches: 4 
-  discount_factor: 0.99
-  lambda: 0.95
-  # **由于加入了 CNN (多模态），学习率初期一定不能像以前纯 MLP 那么奔放！**
-  # 这里由 1e-3 调小到 5e-4 或 1e-4 是稳妥的做法。
-  learning_rate: 1.0e-4
-  learning_rate_scheduler: KLAdaptiveLR
-  learning_rate_scheduler_kwargs:
-    kl_threshold: 0.008
-  
-  # 因为我们现在输入是字典，SKRL的默认预处理器有时会吃瘪。暂设 null 
-  state_preprocessor: null
-  state_preprocessor_kwargs: null
-  
-  # 价值预处理开着是有好处的(稳定 Critic)
-  value_preprocessor: RunningStandardScaler
-  value_preprocessor_kwargs: null
+    class: PPO
+    rollouts: 32 # 每次策略更新前，先与环境交互收集多少步数据 (PPO 的 on-policy 批次长度)
+    learning_epochs: 5 # 每次更新时，对同一批 rollout 数据重复优化的轮数
+    mini_batches: 4 # 将 rollout 再切成多少小批次做梯度下降；越大单次更新越“碎”
+    discount_factor: 0.99 # 折扣因子 gamma，越大越重视长期回报
+    lambda: 0.95 # GAE 的 lambda；在偏差与方差之间折中，0.95 是常见稳健默认值
+    # **由于加入了 CNN (多模态），学习率初期一定不能像以前纯 MLP 那么奔放！**
+    # 这里由 1e-3 调小到 5e-4 或 1e-4 是稳妥的做法。
+    learning_rate: 1.0e-4 # Adam 学习率；视觉输入 + 大网络时通常需要更小学习率
+    learning_rate_scheduler: KLAdaptiveLR # 根据策略 KL 偏移自适应调节学习率
+    learning_rate_scheduler_kwargs:
+        kl_threshold: 0.008 # 目标 KL 阈值，策略更新过猛时会自动降低学习率
+    
+    # 因为我们现在输入是字典，SKRL的默认预处理器有时会吃瘪。暂设 null 
+    state_preprocessor: null # 状态预处理器；dict 观测下先关闭，避免与自定义观测结构冲突
+    state_preprocessor_kwargs: null
+    
+    # 价值预处理开着是有好处的(稳定 Critic)
+    value_preprocessor: RunningStandardScaler # 对 value 目标做运行时标准化，提升 Critic 训练稳定性
+    value_preprocessor_kwargs: null
 
-  random_timesteps: 0
-  learning_starts: 0
-  grad_norm_clip: 1.0
-  ratio_clip: 0.2
-  value_clip: 0.2
-  clip_predicted_values: True
-  
-  # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
-  entropy_loss_scale: 0.01 
-  value_loss_scale: 1.0
-  kl_threshold: 0.0
-  rewards_shaper_scale: 1.0
-  time_limit_bootstrap: False
-  
-  # logging and checkpoint
-  experiment:
-    directory: "pipe_robot_vision_ppo"
-    experiment_name: ""
-    write_interval: auto
-    checkpoint_interval: auto
+    random_timesteps: 0 # 前期完全随机动作步数；PPO 通常设 0
+    learning_starts: 0 # 从第几步开始学习；PPO 通常立即学习
+    grad_norm_clip: 1.0 # 梯度裁剪上限，防止梯度爆炸
+    ratio_clip: 0.2 # PPO 核心裁剪系数 epsilon，限制新旧策略比值偏移
+    value_clip: 0.2 # Critic 目标裁剪幅度，抑制价值网络更新震荡
+    clip_predicted_values: True # 是否对价值预测启用裁剪
+    
+    # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
+    entropy_loss_scale: 0.01 # 熵正则系数；值越大探索越强，但过大可能导致动作发散
+    value_loss_scale: 1.0 # Critic 损失权重；与 policy loss 的相对平衡系数
+    kl_threshold: 0.0 # PPO Agent 内部早停 KL 阈值；0.0 代表关闭该机制(由上面的调度器控制)
+    rewards_shaper_scale: 1.0 # 奖励缩放系数；整体放大奖励或缩小奖励的快捷入口
+    time_limit_bootstrap: False # 回合因时间上限截断时是否 bootstrap 下一个状态价值
+    
+    # logging and checkpoint
+    experiment:
+        directory: "pipe_robot_vision_ppo" # 日志根目录: logs/skrl/pipe_robot_vision_ppo
+        experiment_name: "" # 实验运行名；为空时默认使用短名 ppo_torch (不再自动拼接时间戳)
+        write_interval: auto # TensorBoard 写入频率；auto 由 skrl 自动选择
+        checkpoint_interval: auto # checkpoint 保存频率；auto 由 skrl 自动选择
 
 
 # Sequential trainer
 trainer:
-  class: SequentialTrainer
-  # 跑 4800 次 rollouts * 32 = 十多万步的小型测试
-  timesteps: 48000 
-  environment_info: log
+    class: SequentialTrainer
+    # 跑 4800 次 rollouts * 32 = 十多万步的小型测试
+    timesteps: 96000 # 总环境步数预算(不是 episode 数)
+    environment_info: log # 是否打印环境包装信息与统计信息

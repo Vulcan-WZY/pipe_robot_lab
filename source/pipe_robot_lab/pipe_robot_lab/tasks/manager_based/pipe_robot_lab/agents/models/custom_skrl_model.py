@@ -23,17 +23,18 @@ class CustomActorCritic(Model):
         self.is_critic = is_critic
 
         # ====== A. 视觉特征提取器 (CNN) ======
-        # 深度图：前后各一个，我们假设拼接在一起后是 2 通道
-        # 常见图像大小假定为 64x64 或者稍微更大一点（需根据你 TiledCamera 的配置而定）
-        # 这里构建一个轻量级的 CNN
+        # 使用分层下采样 + 全局池化，避免 Flatten 后维度过大导致训练不稳
         self.cnn = nn.Sequential(
-            nn.Conv2d(2, 32, kernel_size=8, stride=4),
+            nn.Conv2d(2, 32, kernel_size=5, stride=2, padding=2),
             nn.ELU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ELU(),
-            nn.Flatten()
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.ELU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
         )
 
         # 自动推导 CNN 平铺维度，避免写死分辨率导致线性层尺寸错误
@@ -45,7 +46,16 @@ class CustomActorCritic(Model):
         else:
             cam_h, cam_w = 64, 64
         with torch.no_grad():
-            cnn_out_dim = self.cnn(torch.zeros(1, 2, cam_h, cam_w)).shape[-1]
+            cnn_backbone_dim = self.cnn(torch.zeros(1, 2, cam_h, cam_w)).shape[-1]
+
+        # 视觉投影头：进一步压缩并稳定视觉特征
+        self.vision_proj = nn.Sequential(
+            nn.Linear(cnn_backbone_dim, 256),
+            nn.ELU(),
+            nn.Linear(256, 128),
+            nn.ELU(),
+        )
+        cnn_out_dim = 128
 
         # ====== B. 本体感受特征提取器 (MLP) ======
         # 本体维度来源于你的 PolicyCfg 展平后的总维度
@@ -64,7 +74,9 @@ class CustomActorCritic(Model):
                 policy_dim = compute_space_size(critic_space)
         
         self.proprioception_mlp = nn.Sequential(
-            nn.Linear(policy_dim, 256),
+            nn.Linear(policy_dim, 512),
+            nn.ELU(),
+            nn.Linear(512, 256),
             nn.ELU(),
             nn.Linear(256, 128),
             nn.ELU()
@@ -103,12 +115,18 @@ class CustomActorCritic(Model):
         # 1. 取出图像并拼接
         img_front = obs_dict["camera"]["depth_front"]
         img_back = obs_dict["camera"]["depth_back"]
+
+        # 深度图稳健化: 清理 NaN/Inf，并归一化到 [0, 1]
+        img_front = torch.nan_to_num(img_front, nan=0.0, posinf=10.0, neginf=0.0)
+        img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
+        img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
+        img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
         # 在通道维度拼接：要求形状为 [Num_Envs, Channel, Height, Width]
         # 此时应该变为 [N, 2, H, W]
         img_input = torch.cat([img_front, img_back], dim=1)
         
         # 前向 CNN
-        vision_features = self.cnn(img_input)
+        vision_features = self.vision_proj(self.cnn(img_input))
 
         # 2. 取出本体感受
         if self.is_critic and "critic" in obs_dict:

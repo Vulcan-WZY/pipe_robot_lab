@@ -81,6 +81,13 @@ def get_pose_error(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.T
     error = p_geom.get_target_relative_pose(env, asset_cfg)
     return error
 
+
+def get_axial_progress(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """返回指定刚体在管路中的里程进度 (seg_id + axial_ratio)。"""
+    relative_info = p_geom.get_cached_pipe_info(env, asset_cfg)
+    progress = relative_info[:, 3]
+    return progress.view(env.num_envs, 1)
+
 # =============================================================================
 # 4. 观测配置 (Observations Configuration)
 # =============================================================================
@@ -305,10 +312,17 @@ class ObservationsCfg:
     @configclass
     class DebugCfg(ObsGroup):
         # 用于调试的观测项， 可以在测试时打印一些状态信息， 但不参与训练
-        back_link_pose_error = ObsTerm(
+        front_link_pose_error = ObsTerm(
             func = get_pose_error,
             params = {
-                "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"])
+                "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])
+            }
+        )
+        # 前侧夹持臂单元在管路中的里程信息（与 progress_reward 使用同源数据）
+        front_axial_progress = ObsTerm(
+            func = get_axial_progress,
+            params = {
+                "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])
             }
         )
     
@@ -317,5 +331,5 @@ class ObservationsCfg:
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
     critic = CriticCfg()
-    # debug: DebugCfg = DebugCfg()
+    debug: DebugCfg = DebugCfg()
     

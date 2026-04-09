@@ -79,6 +79,11 @@ class PiprRobotDemo:
         # 打印信息
         self.term_names = self.env.action_manager.active_terms
         print(f"[INFO] Action Terms: {self.term_names}")
+        self.rew_term_names = []
+        if hasattr(self.env, "reward_manager") and hasattr(self.env.reward_manager, "active_terms"):
+            self.rew_term_names = list(self.env.reward_manager.active_terms)
+            print(f"[INFO] Reward Terms: {self.rew_term_names}")
+        self._prev_episode_sums = None
         print("[INFO] Gamepad & Keyboard Control Ready.")
 
     def _update_cmd_pos(self, key, delta):
@@ -288,21 +293,180 @@ class PiprRobotDemo:
         else:
             print(f"  > [{group_name_upper}] Unexpected type: {type(group_obs)}")
 
+    def _get_reward_terms_meta(self):
+        """获取 Reward term 名称与权重，风格对齐 observation term 元数据函数。"""
+        term_names = []
+        term_weights = {}
+
+        rew_mgr = getattr(self.env, "reward_manager", None)
+        if rew_mgr is None:
+            return term_names, term_weights
+
+        if hasattr(rew_mgr, "active_terms"):
+            term_names = list(rew_mgr.active_terms)
+        elif hasattr(rew_mgr, "_term_names"):
+            term_names = list(rew_mgr._term_names)
+
+        # 读取配置权重（如果可用）
+        term_cfgs = getattr(rew_mgr, "_term_cfgs", None)
+        if term_cfgs is not None:
+            for i, name in enumerate(term_names):
+                if i < len(term_cfgs) and hasattr(term_cfgs[i], "weight"):
+                    term_weights[name] = float(term_cfgs[i].weight)
+
+        return term_names, term_weights
+
+    def _extract_reward_term_values(self, extras: dict, env_idx: int, term_names: list[str]):
+        """从 extras 中提取每个 reward term 的值（尽量不依赖固定结构）。"""
+        values = {}
+        if not isinstance(extras, dict):
+            return values
+
+        def _get_scalar(v):
+            if isinstance(v, torch.Tensor):
+                flat = v.view(-1)
+                if flat.numel() == 0:
+                    return None
+                idx = env_idx if flat.numel() > env_idx else 0
+                return float(flat[idx].item())
+            if isinstance(v, (int, float)):
+                return float(v)
+            return None
+
+        # 深度优先扫描 dict，支持 key 为 term_name 或以 "/term_name" 结尾
+        stack = [extras]
+        while stack:
+            cur = stack.pop()
+            if not isinstance(cur, dict):
+                continue
+            for k, v in cur.items():
+                if isinstance(v, dict):
+                    stack.append(v)
+                    continue
+                for term_name in term_names:
+                    if k == term_name or str(k).endswith(f"/{term_name}"):
+                        scalar = _get_scalar(v)
+                        if scalar is not None:
+                            values[term_name] = scalar
+
+        return values
+
+    def _extract_reward_episode_sums(self, env_idx: int, term_names: list[str]):
+        """从 reward_manager 的累计缓存提取每个 term 的累计奖励（回退路径）。"""
+        values = {}
+        rew_mgr = getattr(self.env, "reward_manager", None)
+        if rew_mgr is None:
+            return values
+
+        episode_sums = getattr(rew_mgr, "_episode_sums", None)
+        if not isinstance(episode_sums, dict):
+            return values
+
+        for term_name in term_names:
+            if term_name in episode_sums:
+                v = episode_sums[term_name]
+                if isinstance(v, torch.Tensor):
+                    flat = v.view(-1)
+                    if flat.numel() > 0:
+                        idx = env_idx if flat.numel() > env_idx else 0
+                        values[term_name] = float(flat[idx].item())
+
+        return values
+
+    def _extract_reward_step_values_from_episode_delta(self, env_idx: int, term_names: list[str]):
+        """通过 episode_sums 差分近似当前步的 reward term 值。"""
+        rew_mgr = getattr(self.env, "reward_manager", None)
+        if rew_mgr is None:
+            return {}
+        episode_sums = getattr(rew_mgr, "_episode_sums", None)
+        if not isinstance(episode_sums, dict):
+            return {}
+
+        current = {}
+        for term_name in term_names:
+            v = episode_sums.get(term_name, None)
+            if isinstance(v, torch.Tensor):
+                flat = v.view(-1)
+                if flat.numel() > 0:
+                    idx = env_idx if flat.numel() > env_idx else 0
+                    current[term_name] = float(flat[idx].item())
+
+        if not current:
+            return {}
+
+        if self._prev_episode_sums is None:
+            self._prev_episode_sums = current.copy()
+            # 首帧无法差分，返回 0
+            return {k: 0.0 for k in current}
+
+        delta = {}
+        for term_name, cur_v in current.items():
+            prev_v = self._prev_episode_sums.get(term_name, cur_v)
+            # 逐步差分应允许正负号；负值常见于惩罚项
+            delta[term_name] = cur_v - prev_v
+
+        self._prev_episode_sums = current.copy()
+        return delta
+
+    def _print_reward_group(self, step_reward, extras: dict, env_idx: int = 0):
+        """按 term 范式打印每步总奖励与各项奖励。"""
+        if isinstance(step_reward, torch.Tensor):
+            reward_flat = step_reward.view(-1)
+            if reward_flat.numel() > env_idx:
+                print(f"  > [Reward] total_step_reward: {reward_flat[env_idx].item():.4f}")
+            else:
+                print(f"  > [Reward] total_step_reward tensor shape: {tuple(step_reward.shape)}")
+        else:
+            print(f"  > [Reward] total_step_reward: {step_reward}")
+
+        term_names, term_weights = self._get_reward_terms_meta()
+        if not term_names:
+            print("  > [Reward Terms] reward_manager term metadata not available")
+            if isinstance(extras, dict):
+                print(f"  > [Reward Terms] extras keys: {list(extras.keys())}")
+            return
+
+        term_values = self._extract_reward_term_values(extras, env_idx, term_names)
+        source = "extras(step)"
+
+        # extras 往往是 episode 口径，这里优先回退到 episode_sums 差分，得到更接近实时的步级值
+        all_near_zero = term_values and all(abs(v) < 1e-10 for v in term_values.values())
+        if (not term_values) or all_near_zero:
+            delta_values = self._extract_reward_step_values_from_episode_delta(env_idx, term_names)
+            if delta_values:
+                term_values = delta_values
+                source = "reward_manager._episode_sums_delta(step-like)"
+            else:
+                term_values = self._extract_reward_episode_sums(env_idx, term_names)
+                source = "reward_manager._episode_sums(cumulative)"
+
+        print(f"  > [Reward Terms] ({source}):")
+        for term_name in term_names:
+            w = term_weights.get(term_name, None)
+            w_str = f"w={w:.3f}" if w is not None else "w=?"
+            if term_name in term_values:
+                print(f"    - {term_name:<24} ({w_str}): {term_values[term_name]:.4f}")
+            else:
+                print(f"    - {term_name:<24} ({w_str}): N/A")
+
+        if source.startswith("extras") and isinstance(extras, dict) and not term_values:
+            print(f"  > [Reward Terms] extras keys: {list(extras.keys())}")
+
     def run(self):
         """运行主循环"""
         obs, _ = self.env.reset()
         action_mgr = self.env.action_manager
         
-        print("\n" + "="*50)
-        print("Pipe Robot Advanced Control Demo")
-        print(" Controls Reference:")
-        print("  Base Move : L-Stick / WASD")
-        print("  Rear Pipe : X/Y     / U/I (Dia)")
-        print("  Front Pipe: A/B     / J/K (Dia)")
-        print("  Rear Arm  : D-U/D   / Up/Down")
-        print("  Front Arm : D-L/R   / Left/Right")
-        print("  Rear Bend : LB/LT   / T/Y")
-        print("  Front Bend: RB/RT   / G/H")
+        # print("\n" + "="*50)
+        # print("Pipe Robot Advanced Control Demo")
+        # print(" Controls Reference:")
+        # print("  Base Move : L-Stick / WASD")
+        # print("  Rear Pipe : X/Y     / U/I (Dia)")
+        # print("  Front Pipe: A/B     / J/K (Dia)")
+        # print("  Rear Arm  : D-U/D   / Up/Down")
+        # print("  Front Arm : D-L/R   / Left/Right")
+        # print("  Rear Bend : LB/LT   / T/Y")
+        # print("  Front Bend: RB/RT   / G/H")
 
         if self.needs_reset:
             self.env.reset()
@@ -310,7 +474,7 @@ class PiprRobotDemo:
             print("[INFO] Environment Reset Triggered.")
 
         count = 0
-        print_interval = 20
+        print_interval = 1
         import time
         start_time = time.time()
         while simulation_app.is_running():
@@ -326,13 +490,13 @@ class PiprRobotDemo:
                 start_time = current_time
                 
                 # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
-                print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
-                        f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
-                        f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
-                        f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
-                        f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
-                        f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
-                        f"Bend2: {self.cmd_pos['bend_02']:.2f}")
+                # print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
+                #         f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
+                #         f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
+                #         f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
+                #         f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
+                #         f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
+                #         f"Bend2: {self.cmd_pos['bend_02']:.2f}")
             
             for term_name in self.term_names:
                 term = action_mgr.get_term(term_name)
@@ -353,29 +517,33 @@ class PiprRobotDemo:
                 actions_list.append(term_action)
             # 执行
             full_action = torch.cat(actions_list, dim=1)
-            obs, _, terminated, truncated, _ = self.env.step(full_action)
+            obs, step_reward, terminated, truncated, extras = self.env.step(full_action)
 
             
             # count += 1
             if count % print_interval == 0:
                 print(f"[Frame {count}] Observation Debug:")
 
+                # 打印奖励（总奖励 + 奖励分项）
+                self._print_reward_group(step_reward, extras)
+
                 # 只需要传入组名即可自动切片并打印
-                self._print_observation_group(obs, "policy")
+                # self._print_observation_group(obs, "policy")
                 # self._print_observation_group(obs, "critic")
                 self._print_observation_group(obs, "debug")
 
                 # ---------------------------------------------------------
                 # ! 3. 检查 Camera 组 (Dict)
                 # ---------------------------------------------------------
-                camera_obs = obs.get("camera")
-                if isinstance(camera_obs, dict):
-                    print(f"  > [Camera] Group:")
-                    for key, val in camera_obs.items():
-                        if isinstance(val, torch.Tensor):
-                            print(f"    - {key}: {tuple(val.shape)}")
+                # camera_obs = obs.get("camera")
+                # if isinstance(camera_obs, dict):
+                #     print(f"  > [Camera] Group:")
+                #     for key, val in camera_obs.items():
+                #         if isinstance(val, torch.Tensor):
+                #             print(f"    - {key}: {tuple(val.shape)}")
             
             if terminated.any() or truncated.any():
+                self._prev_episode_sums = None
                 obs, _ = self.env.reset()
 
 

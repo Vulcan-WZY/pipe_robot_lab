@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-03-23 13:38
+# LastEditTime: 2026-04-09 14:02
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -19,10 +19,8 @@ def axial_progress_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> 
     """
     # 直接调用缓存的数据避免重复计算
     relative_info = p_geom.get_cached_pipe_info(env, asset_cfg)
-    
     # 提取总里程进度 (seg_id + axial_ratio)
     current_progress = relative_info[:, 3] 
-    
     # 1. 动态初始化环境最大里程记录 buffer
     if not hasattr(env, "max_pipe_progress"):
         env.max_pipe_progress = current_progress.clone()
@@ -33,14 +31,11 @@ def axial_progress_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> 
         current_progress, 
         env.max_pipe_progress
     )
-    
     # 3. 计算增量并截断（仅允许正向增长）
     delta = current_progress - env.max_pipe_progress
     reward = torch.clamp(delta, min=0.0)
-    
     # 4. 更新历史最大里程
     env.max_pipe_progress = torch.max(env.max_pipe_progress, current_progress)
-    
     # 相当于奖励是与历史最大值的差值
     return reward.view(env.num_envs)
 
@@ -60,24 +55,32 @@ def conditional_posture_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCf
     penalty = torch.where(total_force > 1.0, err_sum, torch.zeros_like(err_sum))
     return penalty.view(env.num_envs)
 
-def critical_contact_penalty(env: ManagerBasedRLEnv, front_sensor_cfgs: list[SceneEntityCfg], back_sensor_cfgs: list[SceneEntityCfg]) -> torch.Tensor:
+def wheel_contact_count_reward(
+    env: ManagerBasedRLEnv,
+    sensor_cfgs: list[SceneEntityCfg],
+    threshold: float = 1.0,
+    min_steps: int = 200,
+    no_contact_value: float = -10.0,
+) -> torch.Tensor:
     """
-    关键支撑基线约束：任何情况下，首尾两端至少有一端必须保持完整的三点接触，否则重罚
+    按接触轮子数量给正向奖励：每个接触轮子 +1，6个轮子最高 +6。
     """
-    def is_three_point_contact(cfgs):
-        # 判定给定的一组（3个）传感器是否全部产生接触受力
-        contacts = [(torch.norm(env.scene.sensors[c.name].data.net_forces_w, dim=-1) > 1.0) for c in cfgs]
-        return contacts[0] & contacts[1] & contacts[2]
+    contact_count = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-    front_secure = is_three_point_contact(front_sensor_cfgs)
-    back_secure = is_three_point_contact(back_sensor_cfgs)
-    
-    # 只要有一端是稳定的三点连接，即认为是安全的平衡态
-    is_safe = front_secure | back_secure
-    
-    # 返回一个 0.0 或 1.0 的信号张量，为 1.0 时代表触发惩罚
-    penalty = torch.where(is_safe, torch.zeros_like(is_safe, dtype=torch.float), torch.ones_like(is_safe, dtype=torch.float))
-    return penalty.view(env.num_envs)
+    for cfg in sensor_cfgs:
+        force_mag = torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1, p=2).view(env.num_envs)
+        contact_count += (force_mag > threshold).to(torch.float32)
+
+    # too young 阶段不触发“0接触重罚”，避免刚重置时落体阶段误导策略。
+    too_young = env.episode_length_buf < min_steps
+    no_contact = contact_count < 1.0
+    contact_count = torch.where(
+        torch.logical_and(~too_young, no_contact),
+        torch.full_like(contact_count, no_contact_value),
+        contact_count,
+    )
+
+    return contact_count
 
 @configclass
 class RewardsCfg:
@@ -88,27 +91,34 @@ class RewardsCfg:
     progress_reward = RewTerm(
         func=axial_progress_reward,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])},
-        weight=10.0  # 假设总管段长度为10节，每走一节给100分，可自行缩放
+        weight=500.0  # 放大前进信号，提升每步有效梯度
     )
     
     # 时间流逝惩罚 (让其尽量少花时间)
     alive_penalty = RewTerm(
         func=mdp.is_alive,
-        weight=-0.05
+        weight = 0.03  # 0409: 改为正值, -0.08
     )
     
     # 任务奖励：到达终点
     reach_target_bonus = RewTerm(
         func=mdp.is_terminated_term,
         params={"term_keys": ["reach_goal_reset"]}, 
-        weight=200.0  # 给予极大的奖励（通关！）
+        weight=300.0  # 终点奖励与放大后的过程奖励保持比例
     )
     
     # 任务惩罚：掉出管外（可选）
     fall_off_penalty = RewTerm(
         func=mdp.is_terminated_term,
         params={"term_keys": ["lost_all_contacts"]},
-        weight=-50.0  # 如果是因为掉出管外导致重启的，给与重重惩罚
+        weight=-200.0  # 保持失败惩罚显著，防止“快速掉落”策略
+    )
+    
+    # 任务惩罚：卡死不动（可选）
+    stagnation_penalty = RewTerm(
+        func=mdp.is_terminated_term,
+        params={"term_keys": ["stagnation_reset"]},
+        weight=-200.0  # 惩罚卡死，鼓励
     )
 
     # -----------------------------
@@ -121,7 +131,7 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
             "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")] 
         },
-        weight=-2.0
+        weight=-0.3
     )
     
     # 后夹持臂姿态对齐 (条件掩码)
@@ -131,7 +141,7 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
             "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")] 
         },
-        weight=-2.0
+        weight=-0.3
     )
 
     # -----------------------------
@@ -146,21 +156,30 @@ class RewardsCfg:
     # 关节加速度惩罚: 防止模型输出引发高频震荡
     joint_acc_l2 = RewTerm(
         func=mdp.joint_acc_l2,
-        weight=-2e-5
+        weight=-1e-7
     )
     
-    # 功耗/扭矩惩罚: 提倡多轮共同平缓发力
-    joint_torques_l2 = RewTerm(
-        func=mdp.joint_torques_l2,
-        weight=-1e-5
-    )
+    # # 功耗/扭矩惩罚: 提倡多轮共同平缓发力
+    # joint_torques_l2 = RewTerm(
+    #     func=mdp.joint_torques_l2,
+    #     weight=-1e-7
+    # )
     
-    # 基础支撑底线约束: 只要有一侧不是完整的3点接触，就持续扣分
-    critical_contact_loss = RewTerm(
-        func=critical_contact_penalty,
+    # 轮子接触数奖励: 每个接触轮子 +1，最多 +6
+    wheel_contact_reward = RewTerm(
+        func=wheel_contact_count_reward,
         params={
-            "front_sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")],
-            "back_sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")] 
+            "sensor_cfgs": [
+                SceneEntityCfg("touch_m1"),
+                SceneEntityCfg("touch_m2"),
+                SceneEntityCfg("touch_a1"),
+                SceneEntityCfg("touch_a2"),
+                SceneEntityCfg("touch_a3"),
+                SceneEntityCfg("touch_a4"),
+            ],
+            "threshold": 1.0,
+            "min_steps": 200,
+            "no_contact_value": -6.0,
         },
-        weight=-1.5
+        weight=1.5
     )

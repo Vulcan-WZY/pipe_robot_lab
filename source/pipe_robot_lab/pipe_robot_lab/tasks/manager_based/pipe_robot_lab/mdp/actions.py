@@ -87,15 +87,19 @@ class LinkedArmAction(mdp.JointPositionAction):
         BC = 151.5
         CD = 37
         DA = 162
+        eps = 1e-8
         # 四连杆机构，mid对应角ABC， tail对应(pi - angleBCD)
         # 角ABC的实际值等于 mid_arm + 57.63°， tail为0时， (pi - angleBCD) = 47.87°
         # 计算 mid_arm 对应的 angleABC
         angle_ABC = mid_positions + math.radians(57.63)
         # 使用余弦定理计算 对角线 AC 的长度
-        AC = torch.sqrt(AB**2 + BC**2 - 2*AB*BC*torch.cos(angle_ABC))
+        ac_sq = AB**2 + BC**2 - 2 * AB * BC * torch.cos(angle_ABC)
+        AC = torch.sqrt(torch.clamp(ac_sq, min=eps))
         # 进一步使用余弦定理分别计算 angleBCA和angele ACD
-        angle_BCA = torch.acos((BC**2 + AC**2 - AB**2) / (2 * BC * AC))
-        angle_ACD = torch.acos((AC**2 + CD**2 - DA**2) / (2 * AC * CD))
+        cos_BCA = (BC**2 + AC**2 - AB**2) / torch.clamp(2 * BC * AC, min=eps)
+        cos_ACD = (AC**2 + CD**2 - DA**2) / torch.clamp(2 * AC * CD, min=eps)
+        angle_BCA = torch.acos(torch.clamp(cos_BCA, min=-1.0, max=1.0))
+        angle_ACD = torch.acos(torch.clamp(cos_ACD, min=-1.0, max=1.0))
         # 计算 angleBCD
         angle_BCD = angle_BCA + angle_ACD
         # 计算 tail_arm 位置 (tail_positions)

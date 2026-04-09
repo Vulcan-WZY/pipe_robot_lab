@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-30 10:49
 # Author: Vulcan
-# LastEditTime: 2026-03-23 00:42
+# LastEditTime: 2026-04-09 13:58
 # Description: 
 # ==========
 import os
@@ -24,20 +24,20 @@ PIPE_ROBOT_CFG = ArticulationCfg(
             linear_damping=0.2,
             angular_damping=0.4,
             # 限制刚体极限速度，避免单步位移过大导致漏检碰撞
-            max_linear_velocity=5.0,
-            max_angular_velocity=8.0,
+            max_linear_velocity=3.0,
+            max_angular_velocity=5.0,
             # 控制解穿透速度，减少接触时的不稳定弹飞/抖动
-            max_depenetration_velocity=3.0,
+            max_depenetration_velocity = 3.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
             # 提高求解迭代次数，增强复杂接触（轮子-管道）稳定性
-            solver_position_iteration_count=24,
-            solver_velocity_iteration_count=16,
+            solver_position_iteration_count=36,
+            solver_velocity_iteration_count=24,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.1, 0.7),
+        pos=(0.0, 0.1, 0.3),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             r".*main_steer_.*": 0.0,  # 所有主动轮舵向

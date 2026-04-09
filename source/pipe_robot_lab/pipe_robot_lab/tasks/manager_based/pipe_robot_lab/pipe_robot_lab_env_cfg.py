@@ -74,8 +74,9 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             usd_path=SELECTED_PIPE_STL,
             rigid_props= None,
             collision_props=sim_utils.CollisionPropertiesCfg(
-                    contact_offset=0.00,  # 增加接触偏移以改善碰撞检测
-                    rest_offset=0.001,      # 设置休息偏移为0以确保精确碰撞响应
+                    # 保证 contact_offset > rest_offset，避免接触生成过晚导致轮子“插入”管壁
+                    contact_offset=0.03,
+                    rest_offset=0.0,
             ),
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
@@ -111,8 +112,8 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/BM_02_link_cam/cam_back",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
         update_period=0.1,  # 10Hz
-        height=240,
-        width=320,
+        height=120,
+        width=160,
         data_types=["depth"],  # Intel D435i 深度流
         debug_vis=True,
         spawn=sim_utils.PinholeCameraCfg(
@@ -126,8 +127,8 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/FM_25_link_cam/cam_front",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
         update_period=0.1,  # 10Hz
-        height=240,
-        width=320,
+        height=120,
+        width=160,
         data_types=["depth"],  # Intel D435i 深度流
         debug_vis=True,
         spawn=sim_utils.PinholeCameraCfg(
@@ -202,7 +203,7 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 5
+        self.episode_length_s = 60
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

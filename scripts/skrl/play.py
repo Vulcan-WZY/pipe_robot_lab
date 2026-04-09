@@ -124,7 +124,6 @@ class VisionIsaacLabWrapper(Wrapper):
 
     def __init__(self, env):
         super().__init__(env)
-        self._reset_once = True
         self._observations = None
         self._info = {}
 
@@ -174,11 +173,9 @@ class VisionIsaacLabWrapper(Wrapper):
         return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
     def reset(self):
-        if self._reset_once:
-            observations, self._info = self._env.reset()
-            obs_selected = self._extract_observations(observations)
-            self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
-            self._reset_once = False
+        observations, self._info = self._env.reset()
+        obs_selected = self._extract_observations(observations)
+        self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
         return self._observations, self._info
 
     def render(self, *args, **kwargs):
@@ -318,9 +315,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
     while simulation_app.is_running():
         start_time = time.time()
 
-        # run everything in inference mode
+        # 仅策略前向使用 inference_mode，环境 step/reset 必须在普通上下文运行
         with torch.inference_mode():
-            # agent stepping
             outputs = runner.agent.act(obs, timestep=0, timesteps=0)
             # - multi-agent (deterministic) actions
             if hasattr(env, "possible_agents"):
@@ -328,8 +324,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
             # - single-agent (deterministic) actions
             else:
                 actions = outputs[-1].get("mean_actions", outputs[0])
-            # env stepping
-            obs, _, _, _, _ = env.step(actions)
+
+        # env stepping
+        obs, _, terminated, truncated, _ = env.step(actions)
+
+        # 显式处理 done，避免 play 阶段出现“看起来没有真正重置”的现象
+        if torch.any(terminated) or torch.any(truncated):
+            obs, _ = env.reset()
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video

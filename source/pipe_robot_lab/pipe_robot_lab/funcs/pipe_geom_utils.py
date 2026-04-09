@@ -11,6 +11,28 @@ import time
 
 import pipe_robot_lab.funcs.pose_utils as pose_utils
 
+
+def _get_cache_step_tag(env) -> int | None:
+    """获取用于单步缓存的步号标签。"""
+    # 1) 优先使用环境中的全局步号（若有）
+    for attr_name in ("common_step_count", "global_step_count", "step_count", "_sim_step_counter"):
+        if hasattr(env, attr_name):
+            try:
+                return int(getattr(env, attr_name))
+            except Exception:
+                pass
+
+    # 2) 回退：使用 episode_length_buf 的和作为步号近似
+    # 对于矢量环境，该值通常每步都会变化，可用于触发缓存刷新。
+    if hasattr(env, "episode_length_buf"):
+        try:
+            return int(torch.sum(env.episode_length_buf).item())
+        except Exception:
+            pass
+
+    # 3) 最后回退：无稳定步号时返回 None（调用方按“每次重算”处理）
+    return None
+
 def get_cached_pipe_info(env, asset_cfg) -> torch.Tensor:
     """
     带有单帧缓存机制的管元匹配查询。
@@ -21,12 +43,13 @@ def get_cached_pipe_info(env, asset_cfg) -> torch.Tensor:
     positions = asset.data.body_pos_w[:, asset_cfg.body_ids].squeeze(1)
     
     # 1. 创建基于帧/步数的数据缓存防线
-    current_step = getattr(env, "common_step_count", 0) 
+    current_step = _get_cache_step_tag(env)
     
     if not hasattr(env, "_pipe_state_cache"):
         env._pipe_state_cache = {"step": -1, "data": {}}
         
-    if env._pipe_state_cache["step"] != current_step:
+    # 无法拿到可靠步号时，禁用跨调用缓存，避免使用到陈旧值。
+    if current_step is None or env._pipe_state_cache["step"] != current_step:
         env._pipe_state_cache["step"] = current_step
         env._pipe_state_cache["data"].clear() 
         
