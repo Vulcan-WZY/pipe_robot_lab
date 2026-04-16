@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-30 11:02
 # Author: Vulcan
-# LastEditTime: 2026-04-09 14:01
+# LastEditTime: 2026-04-09 22:07
 # Description: 配置训练环境的终止检测函数
 # ==========
 import torch
@@ -62,8 +62,8 @@ def auto_termination(
             torch.zeros_like(env._stagnation_step_count),
             env._stagnation_step_count,
         )
-        too_young_expanded = too_young.unsqueeze(-1).unsqueeze(-1).expand_as(current_pos)
-        env._stagnation_pos_history = torch.where(too_young_expanded, current_pos, env._stagnation_pos_history)
+    too_young_expanded = too_young.unsqueeze(-1).unsqueeze(-1).expand_as(current_pos)
+    env._stagnation_pos_history = torch.where(too_young_expanded, current_pos, env._stagnation_pos_history)
     
     # 当连续没按要求移出范围的步数大于设定值时,触发终止
     stagnated = env._stagnation_step_count >= max_steps
@@ -172,7 +172,7 @@ class TerminationsCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link", "BM_01_link"]),
             "distance_threshold": 0.08,    # 最大漂移范围：0.05米（即5cm）
             "max_steps": 120,    # 卡死时限：依据你的dt（例如100个step = 1秒，这里设成两秒半左右）
-            "min_steps": 100,
+            "min_steps": 30,
             "enabled": True,
         }
     )

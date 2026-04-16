@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-04-09 14:02
+# LastEditTime: 2026-04-09 20:22
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -181,5 +181,5 @@ class RewardsCfg:
             "min_steps": 200,
             "no_contact_value": -6.0,
         },
-        weight=1.5
+        weight=2.0
     )

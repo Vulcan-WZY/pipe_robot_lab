@@ -1,3 +1,9 @@
+# ===========
+# Date: 2026-03-23 13:59
+# Author: Vulcan
+# LastEditTime: 2026-04-09 20:25
+# Description: 
+# ==========
 seed: 42
 
 # models: {}
@@ -38,7 +44,7 @@ agent:
     learning_starts: 0 # 从第几步开始学习；PPO 通常立即学习
     grad_norm_clip: 1.0 # 梯度裁剪上限，防止梯度爆炸
     ratio_clip: 0.2 # PPO 核心裁剪系数 epsilon，限制新旧策略比值偏移
-    value_clip: 0.2 # Critic 目标裁剪幅度，抑制价值网络更新震荡
+    value_clip: 0.3 # Critic 目标裁剪幅度，抑制价值网络更新震荡
     clip_predicted_values: True # 是否对价值预测启用裁剪
     
     # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
@@ -60,5 +66,5 @@ agent:
 trainer:
     class: SequentialTrainer
     # 跑 4800 次 rollouts * 32 = 十多万步的小型测试
-    timesteps: 96000 # 总环境步数预算(不是 episode 数)
+    timesteps: 72000 # 总环境步数预算(不是 episode 数)
     environment_info: log # 是否打印环境包装信息与统计信息
