@@ -11,33 +11,55 @@ def _get_subspace(space, key):
         return space.spaces.get(key, None)
     return None
 
+class ResBlock(nn.Module):
+    """用于强化学习的轻量级残差块 (参考 Impala CNN)"""
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.gn1 = nn.GroupNorm(8, channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.gn2 = nn.GroupNorm(8, channels)
+        self.act = nn.ELU()
+        
+    def forward(self, x):
+        res = x
+        x = self.act(self.gn1(self.conv1(x)))
+        x = self.gn2(self.conv2(x))
+        return self.act(x + res)
+
 class CustomActorCritic(Model):
     def __init__(self, observation_space, action_space, device, is_critic=False):
-        # 1. 初始化 Model 基类
         Model.__init__(self, observation_space, action_space, device)
         
-        # 2. 如果包含多个角色，比如同时被用作 Actor 和 Critic (如果是单独的，可以在 kwargs 里传 role)
-        # 这里为了演示和 SKRL 集成更加简单，我们可以根据 output_shape 或者 kwargs 里的标识判断
-        # 一般在 skrl 中，可以用单独的两个类（Actor和Critic），或者用一个共享的骨干网络。
-        # 此处使用两套分别初始化的思路（通过参数区分）：
         self.is_critic = is_critic
 
-        # ====== A. 视觉特征提取器 (CNN) ======
-        # 使用分层下采样 + 全局池化，避免 Flatten 后维度过大导致训练不稳
+        # ====== A. 高级视觉特征提取器 (ResNet-like) ======
+        # 相比原先的直连CNN，增加 GroupNorm 和残差连接，大幅提升深度图几何特征的提取能力
         self.cnn = nn.Sequential(
-            nn.Conv2d(2, 32, kernel_size=5, stride=2, padding=2),
+            nn.Conv2d(2, 32, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, 32),
             nn.ELU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            ResBlock(32),
+            
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, 64),
             nn.ELU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            ResBlock(64),
+            
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, 128),
             nn.ELU(),
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            ResBlock(128),
+            
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, 256),
             nn.ELU(),
+            ResBlock(256),
+            
             nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
+            nn.Flatten()
         )
 
-        # 自动推导 CNN 平铺维度，避免写死分辨率导致线性层尺寸错误
         camera_space = _get_subspace(observation_space, "camera")
         front_depth_space = _get_subspace(camera_space, "depth_front") if camera_space is not None else None
         if front_depth_space is not None and hasattr(front_depth_space, "shape") and len(front_depth_space.shape) == 3:
@@ -45,110 +67,106 @@ class CustomActorCritic(Model):
             cam_w = front_depth_space.shape[2]
         else:
             cam_h, cam_w = 64, 64
+            
         with torch.no_grad():
             cnn_backbone_dim = self.cnn(torch.zeros(1, 2, cam_h, cam_w)).shape[-1]
 
-        # 视觉投影头：进一步压缩并稳定视觉特征
+        # 视觉投影：将 CNN 输出归一化并映射到稳定的潜在子空间
         self.vision_proj = nn.Sequential(
             nn.Linear(cnn_backbone_dim, 256),
-            nn.ELU(),
-            nn.Linear(256, 128),
+            nn.LayerNorm(256),
             nn.ELU(),
         )
-        cnn_out_dim = 128
+        cnn_out_dim = 256
 
-        # ====== B. 本体感受特征提取器 (MLP) ======
-        # 本体维度来源于你的 PolicyCfg 展平后的总维度
-        # 在这里我们暂时设一个泛泛的值，可以通过 observation_space 来动态获取维度
-        # SKRL 在字典空间时， observation_space 对应字典
+        # ====== B. 强表征本体特征提取器 (MLP with LayerNorm) ======
         policy_space = _get_subspace(observation_space, "policy")
         if policy_space is not None:
             policy_dim = compute_space_size(policy_space)
         else:
             policy_dim = 100
         
-        # Critic 直接使用 critic 观测组，不再和 policy 重复拼接
         if self.is_critic:
             critic_space = _get_subspace(observation_space, "critic")
             if critic_space is not None:
                 policy_dim = compute_space_size(critic_space)
         
+        # 增加网络深度和宽度，最关键的是加入 LayerNorm 防止不同量纲的状态引爆梯度
         self.proprioception_mlp = nn.Sequential(
             nn.Linear(policy_dim, 512),
+            nn.LayerNorm(512),
+            nn.ELU(),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
             nn.ELU(),
             nn.Linear(512, 256),
-            nn.ELU(),
-            nn.Linear(256, 128),
+            nn.LayerNorm(256),
             nn.ELU()
         )
 
-        # ====== C. 融合与输出层 ======
-        fusion_dim = cnn_out_dim + 128
+        # ====== C. 深度特征融合模块 ======
+        fusion_dim = cnn_out_dim + 256 # 256 (Vision) + 256 (Prop) = 512
         
         self.fusion_mlp = nn.Sequential(
-            nn.Linear(fusion_dim, 256),
+            nn.Linear(fusion_dim, 512),
+            nn.LayerNorm(512),
             nn.ELU(),
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
             nn.ELU()
         )
         
         # ====== D. 动作输出 / 价值输出 ======
         if not self.is_critic:
-            # Actor: 输出均值 (Mean)，动作空间大小对应 action_space
             action_dim = compute_space_size(action_space)
-            self.output_layer = nn.Linear(128, action_dim)
-            # 在 GaussianMixin 中，标准差 (std) 通常作为可学习的参数 (Parameter) 处理
+            self.output_layer = nn.Linear(256, action_dim)
             self.log_std_parameter = nn.Parameter(torch.zeros(action_dim))
         else:
-            # Critic: 输出状态价值 (Value) -> 1 维
-            self.output_layer = nn.Linear(128, 1)
+            self.output_layer = nn.Linear(256, 1)
+            
+        self._init_weights()
+
+    def _init_weights(self):
+        """PPO正交初始化：让网络早期输出方差大但均值向零靠拢，加速收敛"""
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=1.0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        
+        # 对于 Actor 最后层，将初始输出压缩到接近0，让初期动作由环境纯噪声主导探索
+        if not self.is_critic:
+            nn.init.orthogonal_(self.output_layer.weight, gain=0.01)
 
     def compute(self, inputs, role=""):
-        """
-        SKRL Model 要求实现 compute 方法
-        inputs["states"] 是你的包含多模态数据的字典
-        """
         obs_dict = inputs["states"]
         if torch.is_tensor(obs_dict):
             obs_dict = self.tensor_to_space(obs_dict, self.observation_space)
 
-        # 1. 取出图像并拼接
         img_front = obs_dict["camera"]["depth_front"]
         img_back = obs_dict["camera"]["depth_back"]
 
-        # 深度图稳健化: 清理 NaN/Inf，并归一化到 [0, 1]
         img_front = torch.nan_to_num(img_front, nan=0.0, posinf=10.0, neginf=0.0)
         img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
         img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
         img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
-        # 在通道维度拼接：要求形状为 [Num_Envs, Channel, Height, Width]
-        # 此时应该变为 [N, 2, H, W]
-        img_input = torch.cat([img_front, img_back], dim=1)
         
-        # 前向 CNN
+        img_input = torch.cat([img_front, img_back], dim=1)
         vision_features = self.vision_proj(self.cnn(img_input))
 
-        # 2. 取出本体感受
         if self.is_critic and "critic" in obs_dict:
             prop_input = obs_dict["critic"]
         else:
             prop_input = obs_dict["policy"]
         
-        # 前向 MLP
         prop_features = self.proprioception_mlp(prop_input)
 
-        # 3. 特征融合
         fused_features = torch.cat([vision_features, prop_features], dim=-1)
         latent_features = self.fusion_mlp(fused_features)
 
-        # 4. 输出
         if not self.is_critic:
-            # 返回 (Mean, log_std, {} ) 给 GaussianMixin
-            # 对于 GaussianMixin，如果定义了 self.log_std_parameter 并返回 log_std
-            # skrl会自动处理正态分布
             return self.output_layer(latent_features), self.log_std_parameter, {}
         else:
-            # Critic 输出 V(s)
             return self.output_layer(latent_features), {}
 
 class CustomActor(GaussianMixin, CustomActorCritic):
