@@ -155,6 +155,10 @@ class VisionIsaacLabWrapper(Wrapper):
         return None
 
     @property
+    def state(self):
+        return None
+
+    @property
     def observation_space(self):
         return self._observation_space
 

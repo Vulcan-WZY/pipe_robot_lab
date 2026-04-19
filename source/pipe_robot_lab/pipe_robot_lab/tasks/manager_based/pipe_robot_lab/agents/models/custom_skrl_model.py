@@ -28,8 +28,8 @@ class ResBlock(nn.Module):
         return self.act(x + res)
 
 class CustomActorCritic(Model):
-    def __init__(self, observation_space, action_space, device, is_critic=False):
-        Model.__init__(self, observation_space, action_space, device)
+    def __init__(self, observation_space, action_space, device, is_critic=False, **kwargs):
+        Model.__init__(self, observation_space=observation_space, action_space=action_space, device=device, **kwargs)
         
         self.is_critic = is_critic
 
@@ -141,7 +141,9 @@ class CustomActorCritic(Model):
     def compute(self, inputs, role=""):
         obs_dict = inputs["states"]
         if torch.is_tensor(obs_dict):
-            obs_dict = self.tensor_to_space(obs_dict, self.observation_space)
+            # tensor_to_space was incorrectly returning something or nothing.
+            from skrl.utils.spaces.torch import unflatten_tensorized_space
+            obs_dict = unflatten_tensorized_space(self.observation_space, obs_dict)
 
         img_front = obs_dict["camera"]["depth_front"]
         img_back = obs_dict["camera"]["depth_back"]
@@ -171,10 +173,10 @@ class CustomActorCritic(Model):
 
 class CustomActor(GaussianMixin, CustomActorCritic):
     def __init__(self, observation_space, action_space, device, **kwargs):
-        CustomActorCritic.__init__(self, observation_space, action_space, device, is_critic=False)
+        CustomActorCritic.__init__(self, observation_space=observation_space, action_space=action_space, device=device, is_critic=False, **kwargs)
         GaussianMixin.__init__(self, clip_actions=False)
 
 class CustomCritic(DeterministicMixin, CustomActorCritic):
     def __init__(self, observation_space, action_space, device, **kwargs):
-        CustomActorCritic.__init__(self, observation_space, action_space, device, is_critic=True)
+        CustomActorCritic.__init__(self, observation_space=observation_space, action_space=action_space, device=device, is_critic=True, **kwargs)
         DeterministicMixin.__init__(self, clip_actions=False)

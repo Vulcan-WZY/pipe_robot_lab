@@ -185,7 +185,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs=1, env_spacing=4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs= 32, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
