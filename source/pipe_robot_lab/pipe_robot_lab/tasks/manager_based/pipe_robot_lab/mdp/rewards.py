@@ -48,9 +48,8 @@ def conditional_posture_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCf
     err_sum = torch.sum(torch.abs(pose_error), dim=-1) # 各方向误差之和
     
     # 判断该侧是否和管道有接触（这里只要几个传感器接触力的总和大于阈值即认为“有接触”）
-    # forces = [torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1) for cfg in sensor_cfgs]
-    forces = [torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1).squeeze(-1) for cfg in sensor_cfgs]
-    total_force = torch.sum(torch.stack(forces, dim=0), dim=0)
+    # 直接隐式迭代求和避免多余维度的隐式 stack 创建降低性能
+    total_force = sum(torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1).squeeze(-1) for cfg in sensor_cfgs)
     
     # 条件掩码：接触力大于阈值(如1.0N)视为处于抓管状态，执行惩罚；否则(悬空越障)返回0
     penalty = torch.where(total_force > 1.0, err_sum, torch.zeros_like(err_sum))

@@ -30,10 +30,10 @@ def auto_termination(
 
     asset = env.scene[asset_cfg.name] # 拿机器人资产
     body_ids = asset.find_bodies(asset_cfg.body_names)[0] # 获取刚体的索引
-    current_pos = asset.data.body_pos_w[:,body_ids,:].clone() # 获取对应刚体的世界坐标
+    current_pos = asset.data.body_pos_w[:,body_ids,:] # 避免 clone() 原地分配额外显卡内存
     
     if not hasattr(env, "_stagnation_pos_history"):
-        env._stagnation_pos_history = current_pos.clone()
+        env._stagnation_pos_history = current_pos.clone() # 首次初始化脱离引用
         env._stagnation_step_count = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     
     # 获取坐标变化距离, 使用欧氏距离

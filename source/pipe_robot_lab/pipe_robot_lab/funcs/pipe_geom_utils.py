@@ -58,8 +58,12 @@ def get_cached_pipe_info(env, asset_cfg) -> torch.Tensor:
     if cache_key in env._pipe_state_cache["data"]:
         return env._pipe_state_cache["data"][cache_key] 
         
-    trans_inv = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=env.device)
-    info = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=env.device)
+    if not hasattr(env, "_gpu_pipe_transform_inv"):
+        env._gpu_pipe_transform_inv = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=env.device)
+        env._gpu_pipe_info = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=env.device)
+
+    trans_inv = env._gpu_pipe_transform_inv
+    info = env._gpu_pipe_info
     
     out = is_point_on_pipe(positions, trans_inv, info, already_inverted=True)
     env._pipe_state_cache["data"][cache_key] = out
@@ -82,8 +86,12 @@ def get_target_relative_pose(env, asset_cfg) -> torch.Tensor:
     
     device = quats.device
     
-    trans_raw = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=device)
-    info_raw = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=device)
+    if not hasattr(env, "_gpu_pipe_transform_inv"):
+        env._gpu_pipe_transform_inv = torch.as_tensor(env.cfg.pipe_transform_inv, dtype=torch.float32, device=env.device)
+        env._gpu_pipe_info = torch.as_tensor(env.cfg.pipe_info, dtype=torch.float32, device=env.device)
+
+    trans_raw = env._gpu_pipe_transform_inv
+    info_raw = env._gpu_pipe_info
     already_inverted = True
 
     # * 1. 批量获取 (使用缓存的相对坐标进度信息)
@@ -106,18 +114,18 @@ def get_target_relative_pose(env, asset_cfg) -> torch.Tensor:
     
     # * 3. 计算目标位姿坐标系中的y轴与z轴方向向量(在管元坐标系下)
     # 类型0: 假设所有输入点匹配到的管元都是直管道
-    y_straight = torch.zeros((num_envs , 3), dtype = dtype, device= device)
+    y_straight = local_xyz.new_zeros((num_envs, 3))
     y_straight[:,1] = 1.0 # 直管段的匹配点方向向量沿管元坐标系y轴
-    z_straight = torch.zeros((num_envs , 3) , dtype= dtype , device= device)
+    z_straight = local_xyz.new_zeros((num_envs, 3))
     z_straight[:, 0] = local_xyz[:,0]
     z_straight[:, 2] = local_xyz[:,2]
     
     # 类型1: 假设所有输入点匹配到的管元都是弯管道
     theta_p = axial_ratio * theta
-    y_curved = torch.zeros((num_envs , 3) , dtype=dtype , device= device)
+    y_curved = local_xyz.new_zeros((num_envs, 3))
     y_curved[:,1] = torch.cos(theta_p)
     y_curved[:,2] = torch.sin(theta_p)
-    z_curved = torch.zeros((num_envs , 3) , dtype= dtype , device= device)
+    z_curved = local_xyz.new_zeros((num_envs, 3))
     z_curved[: , 0] = local_xyz[:, 0]
     z_curved[:,1] = local_xyz[:, 1] - L * torch.sin(theta_p)
     z_curved[:,2] = local_xyz[:,2] - L * (1.0 - torch.cos(theta_p))
