@@ -474,7 +474,7 @@ class PiprRobotDemo:
             print("[INFO] Environment Reset Triggered.")
 
         count = 0
-        print_interval = 1
+        print_interval = 1000
         import time
         start_time = time.time()
         while simulation_app.is_running():

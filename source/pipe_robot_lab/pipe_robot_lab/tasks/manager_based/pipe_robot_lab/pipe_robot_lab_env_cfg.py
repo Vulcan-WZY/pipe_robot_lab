@@ -115,7 +115,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         height=120,
         width=160,
         data_types=["depth"],  # Intel D435i 深度流
-        debug_vis=True,
+        debug_vis=False, # 会导致 IsaacLab 每一帧都把带深度图结果的 UI viewport 画出来并强制渲染到主窗口上
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
             horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
@@ -130,7 +130,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         height=120,
         width=160,
         data_types=["depth"],  # Intel D435i 深度流
-        debug_vis=True,
+        debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
             horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
@@ -185,7 +185,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs= 32, env_spacing=4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 512, env_spacing = 4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -202,12 +202,13 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self) -> None:
         """Post initialization."""
         # general settings
-        self.decimation = 2
         self.episode_length_s = 60
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings
-        self.sim.dt = 1 / 100
+        self.decimation = 2                         # 抽帧倍数 (控制渲染频率，降低CPU/GPU负载), 
+        # 同时也决定了Agent的控制频率 (control_freq = sim_freq / decimation = 100 / 2 = 50Hz)
+        self.sim.dt = 1 / 100                       # 物理仿真时间步长(底层物理引擎每0.01秒更新一次)
         self.sim.render_interval = self.decimation
         
         self.sim.physx.bounce_threshold_velocity = 0.2

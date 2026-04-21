@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-30 10:49
 # Author: Vulcan
-# LastEditTime: 2026-04-09 13:58
+# LastEditTime: 2026-04-21 14:01
 # Description: 
 # ==========
 import os
@@ -32,8 +32,8 @@ PIPE_ROBOT_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
             # 提高求解迭代次数，增强复杂接触（轮子-管道）稳定性
-            solver_position_iteration_count=36,
-            solver_velocity_iteration_count=24,
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=1,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
