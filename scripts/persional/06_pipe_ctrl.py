@@ -4,6 +4,9 @@ from isaaclab.app import AppLauncher
 
 # create argparser
 parser = argparse.ArgumentParser(description="Pipe Robot Control Demo Script.")
+parser.add_argument("--video", action="store_true", default=False, help="Record video.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_dir", type=str, default="videos", help="Directory to save videos.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -549,10 +552,24 @@ class PiprRobotDemo:
 
 
 def main():
+    import gymnasium as gym
+
     # 1. 实例化配置
     env_cfg = PipeRobotLabEnvCfg()
     # 2. 创建环境
     env = ManagerBasedRLEnv(cfg=env_cfg)
+
+    # 如果启用了视频录制，则包上一层 Gymnasium 视频录制 Wrapper
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": args_cli.video_dir,
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length,
+            "disable_logger": True,
+        }
+        print(f"[INFO] Recording video to {args_cli.video_dir}.")
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
     # 3. 启动交互 Demo
     demo = PiprRobotDemo(env)
     demo.run()
