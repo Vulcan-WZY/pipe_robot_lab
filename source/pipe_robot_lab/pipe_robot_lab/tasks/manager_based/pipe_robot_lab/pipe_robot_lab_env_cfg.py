@@ -33,6 +33,10 @@ SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
 SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".json") if SELECTED_PIPE_STL else ""
 # ! 随机管道代码段结束
 
+# ! 260504 课程学习框架相关 引入随机管道直径开关
+USE_USD_PIPE = True # 使用USD文件集中的随机管道文件, 如果改为false则使用一段随机直径的直管道
+# ! end
+
 ##
 # Scene definition
 ##

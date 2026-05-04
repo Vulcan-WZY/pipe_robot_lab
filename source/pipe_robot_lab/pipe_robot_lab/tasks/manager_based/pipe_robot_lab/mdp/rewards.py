@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-04-21 11:17
+# LastEditTime: 2026-05-04 19:13
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -82,6 +82,21 @@ def wheel_contact_count_reward(
 
     return contact_count
 
+def dia_matched_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: list[SceneEntityCfg], # 共计需要评价四个mid_arm的姿态
+) -> torch.Tensor:
+    """
+    夹持臂角度与管道直径的匹配奖励, 通过从环境中得到当前夹持臂对应的管道直径, 
+    解算出理论最优的mid_arm角度值, 以此构建偏差越小奖励越大的函数
+    """
+    # 通过matlab获取的六次多项式模型参数:
+    # target_angle(dia) = -3.1762   38.3970 -184.8731  453.9609 -593.4035  408.7483  -85.6488
+    # 输入dia: 管道直径 mm/100, 如直径0.36m -> 3.6
+    # 输出target_angle: mid_arm的理论最优夹持角度，单位为度
+    
+    
+
 @configclass
 class RewardsCfg:
     # -----------------------------
@@ -142,6 +157,11 @@ class RewardsCfg:
             "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")] 
         },
         weight=-0.3
+    )
+    
+    # 夹持角度匹配奖励: mid_arm的实际角度值与理论上管道直径->>夹持角度的映射关系越接近，奖励越高
+    dia_match_reward = RewTerm(
+        
     )
 
     # -----------------------------

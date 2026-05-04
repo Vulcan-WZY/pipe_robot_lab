@@ -78,4 +78,5 @@ tests/
 source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/meshes/*
 source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/json/*
 source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/objs/*
+**/assets/pipe_env/**/**.usd
 # source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/usd/*

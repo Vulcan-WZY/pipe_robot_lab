@@ -1,3 +1,9 @@
+# ===========
+# Date: 2026-02-21 08:58
+# Author: Vulcan
+# LastEditTime: 2026-05-04 23:09
+# Description: 用于配置管路生成器工作时的可选参数
+# ==========
 generation:
     mode: "random"  # random: 每次调用生成器都会生成一个完全随机的管道环境
                     # fixed:  按照定义的信息列表生成管道环境，适用于测试和调试
@@ -9,14 +15,14 @@ generation:
     second_mode: "safe"     # random: 管道直径完全随机
                             # safe: 限定弯管前后必须为直管，且弯管的直径必须等于前后直管的直径
     # * 输出保存路径
-    total_nums: 15 # 一次运行生成器批量生成的管道环境数目
+    total_nums: 100 # 一次运行生成器批量生成的管道环境数目
     meshes_path: "./meshes" # 存放管道网格的相对路径
     usd_path: "./usd" # 存放管道环境的USD文件的相对路径
     json_path: "./json" # 存放管道参数以及变换矩阵的json文件的相对路径
 
 pipe:
     # 通用参数
-    num_pipe_prims: [4 , 8] # 管道原件数目(直管&弯管)，生成器中随机取一个整数
+    num_pipe_prims: [1 , 1] # 管道原件数目(直管&弯管)，生成器中随机取一个整数
     D_range: [0.25 , 0.40]  # 管道直径范围, m
 
     # 直管适用
