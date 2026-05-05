@@ -24,27 +24,26 @@ def get_latest_checkpoint(root_dir):
     files.sort(key=os.path.getmtime, reverse=True)
     return files[0]
 
-def cleanup_old_checkpoints(root_dir, keep_window):
+def cleanup_old_checkpoints(root_dir, keep_qty):
     """
-    滑动窗口清理：只保留最近几个由当前时间戳创建的 ppo 子文件夹中的 .pt 权重文件，
-    清理更旧文件夹中的内容（保留其外层的其余信息如 Tensorboard event 以便仍可绘图），节约磁盘开销。
+    现在训练被强制合并到了单个连续的文件夹中，此函数全局扫描 checkpoins 里的 `.pt` 文件，
+    按时间降序排列，仅保留最新的 keep_qty 个文件（best_agent.pt 会被始终保护避免误删）。
     """
-    # 获取所有的 ppo-* 子目录
-    subdirs = [os.path.join(root_dir, d) for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
-    # 按目录的最后修改时间排序（从旧到新）
-    subdirs.sort(key=os.path.getmtime)
-    
-    if len(subdirs) <= keep_window:
+    checkpoints_path = os.path.join(root_dir, "**", "checkpoints", "*.pt")
+    files = glob.glob(checkpoints_path, recursive=True)
+    if not files:
         return
         
-    for old_dir in subdirs[:-keep_window]:
-        ckpt_dir = os.path.join(old_dir, "checkpoints")
-        if os.path.exists(ckpt_dir):
-            pt_files = glob.glob(os.path.join(ckpt_dir, "*.pt"))
-            if pt_files:
-                print(f"[INFO] 🧹 Window Cleanup: Deleting {len(pt_files)} old pt files in {old_dir}")
-                for pt in pt_files:
-                    os.remove(pt)
+    # 过滤掉名为 best_agent 的权重, 以免辛苦训练突破的最佳模型被丢掉
+    files = [f for f in files if "best_agent" not in os.path.basename(f)]
+    # 按修改时间从新到旧排
+    files.sort(key=os.path.getmtime, reverse=True)
+    
+    if len(files) > keep_qty:
+        to_delete = files[keep_qty:]
+        for pt in to_delete:
+            os.remove(pt)
+        print(f"[INFO] 🧹 PT Cleanup: Deleted {len(to_delete)} old pt files. Kept newest {keep_qty}.")
 
 def main():
     # 获取 yaml 和当前脚本所在目录
@@ -89,7 +88,8 @@ def main():
             "--num_envs", str(train_cfg.get("num_envs", 32)),
             "--max_iterations", str(max_iterations),
             "--save_interval", str(calc_save_interval),
-            "--experiment_dir", log_root_dir  # 传递日志路径
+            "--experiment_dir", log_root_dir,  # 传递日志路径
+            "--run_name", "continuous_run"     # 强行锁死子文件夹名称为连续运行模式，不再按时间戳割裂
         ]
         
         # 判断并添加 IsaacLab 以及模拟器的解析附加参数
@@ -137,9 +137,9 @@ def main():
             
         print(f"[INFO] ✓ Round {round_idx} completed successfully.")
         
-        # 触发本地硬盘保护：滑动清理很久远的无用PT历史文件
-        keep_window = ckpt_cfg.get("keep_window_rounds", 3)
-        cleanup_old_checkpoints(log_root_dir, keep_window)
+        # 触发本地硬盘保护：全局清理超过数量上限的历史PT权重
+        keep_max_pt = ckpt_cfg.get("keep_max_pt_files", 5)
+        cleanup_old_checkpoints(log_root_dir, keep_max_pt)
         
         print("[INFO] Waiting 5 seconds for IsaacLab and GPU VRAM resources to be fully released...")
         time.sleep(5) 

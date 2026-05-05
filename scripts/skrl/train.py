@@ -41,6 +41,7 @@ parser.add_argument("--checkpoint", type=str, default=None, help="Path to model 
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--save_interval", type=int, default=None, help="Steps interval to save model checkpoints.")
 parser.add_argument("--experiment_dir", type=str, default=None, help="Override the experiment directory for logging.")
+parser.add_argument("--run_name", type=str, default=None, help="Override the run name (subfolder) to prevent timestamp folder creation.")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--ml_framework",
@@ -223,9 +224,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # multi-gpu training config
     if args_cli.distributed:
         env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
+        
+    # Get checkpoint path early to extract accumulated timestep
+    resume_path_early = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
+    start_timestep = 0
+    if resume_path_early:
+        import re
+        match = re.search(r"(\d+)\.pt", resume_path_early)
+        if match:
+            start_timestep = int(match.group(1))
+            print(f"[INFO] ⏱️ Discovered resume timestep from checkpoint: {start_timestep}")
+
     # max iterations for training
     if args_cli.max_iterations:
-        agent_cfg["trainer"]["timesteps"] = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
+        additional_timesteps = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
+        agent_cfg["trainer"]["timesteps"] = start_timestep + additional_timesteps
+        print(f"[INFO] 🎯 Training target: reach {agent_cfg['trainer']['timesteps']} timesteps ({additional_timesteps} new steps expected).")
+        
+    # **关键修复**：将起点的真实时间戳注射进 trainer 的底层配置中，防止底层强制从 0 开始刷数据覆盖同名 x 轴
+    agent_cfg["trainer"]["initial_timestep"] = start_timestep
+        
     agent_cfg["trainer"]["close_environment_at_exit"] = False
     # configure the ML framework into the global skrl variable
     if args_cli.ml_framework.startswith("jax"):
@@ -242,8 +260,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # modify the checkpointing interval if requested
     if args_cli.save_interval is not None:
-        agent_cfg["agent"]["experiment"]["checkpoint_interval"] = args_cli.save_interval
-        print(f"[INFO] Override model save interval to {args_cli.save_interval} iterations")
+        # SKRL 规定 checkpoint_interval 是以底层物理步数 (timesteps) 为单位，而不是 PPO iteration。
+        # 这里自动用传进来的 save_interval 乘以 rollouts 步长来校正，使其行为表现和我们外层的直觉完全一致。
+        rollouts = agent_cfg["agent"].get("rollouts", 1)
+        real_save_interval = args_cli.save_interval * rollouts
+        agent_cfg["agent"]["experiment"]["checkpoint_interval"] = real_save_interval
+        print(f"[INFO] Override model save interval to {args_cli.save_interval} iterations (which is {real_save_interval} timesteps)")
 
     # specify directory for logging experiments
     if args_cli.experiment_dir:
@@ -252,10 +274,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         log_root_path = os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"])
         log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs using timestamp style: ppo-YY-MM-DD-HH
-    default_run_name = f"{algorithm}-{datetime.now().strftime('%y-%m-%d-%H-%M')}"
-    custom_run_name = str(agent_cfg["agent"]["experiment"].get("experiment_name", "")).strip()
-    log_dir = custom_run_name if custom_run_name else default_run_name
+    
+    if args_cli.run_name is not None:
+        log_dir = args_cli.run_name
+    else:
+        # specify directory for logging runs using timestamp style: ppo-YY-MM-HH
+        default_run_name = f"{algorithm}-{datetime.now().strftime('%y-%m-%H')}"
+        custom_run_name = str(agent_cfg["agent"]["experiment"].get("experiment_name", "")).strip()
+        log_dir = custom_run_name if custom_run_name else default_run_name
+        
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     # set directory into agent config
@@ -349,6 +376,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if resume_path:
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
         runner.agent.load(resume_path)
+        # Force the timestep internally just in case SKRL doesn't do it properly
+        if 'start_timestep' in locals() and start_timestep > 0:
+            runner.agent.initial_timestep = start_timestep
+            runner.agent.timestep = start_timestep
+            
+            # 同步更新 Trainer 的时间和进度轴起点
+            if hasattr(runner, "trainer") and runner.trainer is not None:
+                runner.trainer.initial_timestep = start_timestep
+                runner.trainer.timestep = start_timestep
+            else:
+                print("[WARNING] Could not find trainer to override initial_timestep")
 
     # run training
     runner.run()
