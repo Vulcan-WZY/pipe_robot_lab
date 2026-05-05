@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-04 19:13
+# LastEditTime: 2026-05-05 15:41
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -94,7 +94,7 @@ def dia_matched_reward(
     # target_angle(dia) = -3.1762   38.3970 -184.8731  453.9609 -593.4035  408.7483  -85.6488
     # 输入dia: 管道直径 mm/100, 如直径0.36m -> 3.6
     # 输出target_angle: mid_arm的理论最优夹持角度，单位为度
-    
+    pass
     
 
 @configclass
@@ -160,9 +160,9 @@ class RewardsCfg:
     )
     
     # 夹持角度匹配奖励: mid_arm的实际角度值与理论上管道直径->>夹持角度的映射关系越接近，奖励越高
-    dia_match_reward = RewTerm(
+    # dia_match_reward = RewTerm(
         
-    )
+    # )
 
     # -----------------------------
     # 3. 运动稳定性正则化 (Stability & Regularization)

@@ -29,6 +29,7 @@ class ResBlock(nn.Module):
 
 class CustomActorCritic(Model):
     def __init__(self, observation_space, action_space, device, is_critic=False, **kwargs):
+        kwargs.pop("return_source", None)
         Model.__init__(self, observation_space=observation_space, action_space=action_space, device=device, **kwargs)
         
         self.is_critic = is_critic

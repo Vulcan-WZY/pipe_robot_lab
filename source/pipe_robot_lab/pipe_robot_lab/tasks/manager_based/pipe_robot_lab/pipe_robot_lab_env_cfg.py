@@ -31,6 +31,17 @@ all_pipe_stls = [p for p in glob.glob(os.path.join(MESHES_DIR, "*.usd"))]
 SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
 # 推导出对应的 JSON 文件路径
 SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".json") if SELECTED_PIPE_STL else ""
+# * 根据选取的管路中第一节管道直径得到机器人加载位置偏置
+ROBOT_INIT_Z = 0.5 # 先给默认值
+if os.path.exists(SELECTED_PIPE_JSON):
+    with open(SELECTED_PIPE_JSON, 'r',encoding='utf-8') as f:
+        _temp_data = json.load(f)
+        pipe_dia = _temp_data[0]["info"][2]
+        pipe_radius = pipe_dia / 2.0
+
+        bias = 0.031 + 0.005 # 机器人模型原点到主驱动轮下端面距离, 并给予额外的安全间隙
+        ROBOT_INIT_Z = pipe_radius + bias
+        print(f"[INFO] Selected Pipe: {os.path.basename(SELECTED_PIPE_STL)} | Dia: {pipe_dia:.3f} | Set Robot Initial Z to: {ROBOT_INIT_Z:.3f}m")
 # ! 随机管道代码段结束
 
 # ! 260504 课程学习框架相关 引入随机管道直径开关
@@ -111,6 +122,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
     # )
     # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
     robot: ArticulationCfg = PIPE_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot.init_state.pos = (0.0, 0.1, ROBOT_INIT_Z) # 根据管道直径动态设置初始Z高度
     
     back_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/BM_02_link_cam/cam_back",
@@ -189,7 +201,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 1, env_spacing = 4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 3, env_spacing = 4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

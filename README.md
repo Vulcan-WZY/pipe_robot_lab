@@ -4,6 +4,7 @@
  * @LastEditTime: 2026-05-03 20:11
  * @Description: 
 -->
+
 # pipe_robot强化学习训练环境
 
 ## 模型文件备注
@@ -42,17 +43,42 @@
 python -m pip install -e source/pipe_robot_lab
 ```
 
-# Template for Isaac Lab Projects
+# 开发记录
 
-## Installation
+## 2026.05
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+### 0504~0505
 
-  ```bash
-  # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-  python -m pip install -e source/pipe_robot_lab
+#### 修改机器人reset时的加载位置
 
-  ```
+这里是在开始构建课程学习框架初期, 由于需要借助外部脚本重置IsaacLab整个训练流程, 因此计划优化一下之前一贯以来的"机器人从空中丢到管道上"的方式, 改为根据管道yaml描述文件的第一节信息, 将机器人**尽可能准确地放置在最开始的管道表面**上.
+
+在现有方案基础上,  在开头随机选择文件的部分即时读取第一节管道的直径,  然后在后续配置管道环境时显示更新机器人的加载位置. 注意经过测量, 这里的由机械结构决定的偏置值为**0.031m**.
+
+#### 解决并行环境共用同一个管道问题
+
+暂时搁置了, 本来想实现在在线训练过程中没reset一次, 就更新一次管道网路的, 但是发现这样是较难实现且对于IsaacLab并行环境来说是比较不稳定的.  决定只靠多轮启动器脚本来实现.
+
+#### 引入外部多轮启动器脚本
+
+这个工作其实之前在最初完善好管道网格随机生成器时就已经想做了, 由于IsaacLab的复杂机制, 使得很难稳定实现在线训练过程中每次reset都换一次环境. 为此计划编写一个私有外部训练脚本, 训练一定轮数后就自动重启IsaacLab更换环境.
+
+也就是做一个**自动多轮启动器**, 利用Bash脚本和算法"断点续训"的特性来解决问题.现在这个多轮启动器本质上是通过python实现的, 只是通过sh来启动. 对应的启动文件就是 `start_curriculum.sh`脚本, 这个脚本事实上对应启动的是 `auto_train_loop.py`文件, 该文件自动读取了存储在相对路径config下的 `auto_train.yaml`配置文件. 该文件中配置了训练需要用到的多种参数与选项. 
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+111

@@ -1,0 +1,24 @@
+# ===========
+# Date: 2026-05-05 14:23
+# Author: Vulcan
+# LastEditTime: 2026-05-05 17:21
+# Description: PPO训练的自动化配置文件，定义了训练框架、任务、环境数量、迭代次数等关键参数，以及Isaac Lab的渲染设置和Checkpoint的存储路径与续训选项。
+# ==========
+training:
+    framework: "skrl"                     # 训练框架支持选择 (skrl 或 rsl_rl)
+    task: "Template-Pipe-Robot-Lab-v1"    # 训练任务的注册名 (根据你的环境注册码修改)
+    num_envs: 2                          # 开启的并行环境数量 (针对少量显存, 推荐32-64)
+    max_iterations_per_round: 20         # 每轮在一个管道上训练的最大 PPO 迭代次数 (依模型稳定速度而定, 到此数值后模型保存退出)
+    total_rounds: 500                     # 总共“重启环境换管子”的循环轮数
+    # 因此训练总迭代次数 = max_iterations_per_round * total_rounds, 例如 150 * 500 = 75000 迭代
+
+isaaclab:
+    headless: true                        # 是否开启无头模式
+    video: false                          # 是否在训练期间录制视频
+    video_interval: 2000                  # 录制视频的步数间隔
+
+checkpointing:
+    log_root_dir: "logs/skrl/ppo_auto_01"  # Tensorboard 日志与 Checkpoint 存放的根目录
+    resume_from_latest: true              # 若开启，自动扫描 `log_root_dir` 下最新修改的 `.pt` 权重文件进行断点续训接力
+    saves_per_round: 2                    # 每小轮训练保存模型的次数 (例如配为2, 则在小轮中间和结束各保存一次)
+    keep_window_rounds: 2                 # 滑动窗口: 清理功能只会保留最近 3 个小轮中的 `.pt` 权重文件，更早的历史权重全部自动删除(但保留tensorboard数据)以大幅节约硬盘空间

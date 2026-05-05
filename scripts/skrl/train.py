@@ -39,6 +39,8 @@ parser.add_argument(
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint to resume training.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument("--save_interval", type=int, default=None, help="Steps interval to save model checkpoints.")
+parser.add_argument("--experiment_dir", type=str, default=None, help="Override the experiment directory for logging.")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--ml_framework",
@@ -238,12 +240,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
     env_cfg.seed = agent_cfg["seed"]
 
+    # modify the checkpointing interval if requested
+    if args_cli.save_interval is not None:
+        agent_cfg["agent"]["experiment"]["checkpoint_interval"] = args_cli.save_interval
+        print(f"[INFO] Override model save interval to {args_cli.save_interval} iterations")
+
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"])
-    log_root_path = os.path.abspath(log_root_path)
+    if args_cli.experiment_dir:
+        log_root_path = os.path.abspath(args_cli.experiment_dir)
+    else:
+        log_root_path = os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"])
+        log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs using timestamp style: ppo-YY-MM-HH
-    default_run_name = f"{algorithm}-{datetime.now().strftime('%y-%m-%H')}"
+    # specify directory for logging runs using timestamp style: ppo-YY-MM-DD-HH
+    default_run_name = f"{algorithm}-{datetime.now().strftime('%y-%m-%d-%H-%M')}"
     custom_run_name = str(agent_cfg["agent"]["experiment"].get("experiment_name", "")).strip()
     log_dir = custom_run_name if custom_run_name else default_run_name
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
