@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-05 15:41
+# LastEditTime: 2026-05-05 23:49
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -84,17 +84,70 @@ def wheel_contact_count_reward(
 
 def dia_matched_reward(
     env: ManagerBasedRLEnv,
-    asset_cfg: list[SceneEntityCfg], # 共计需要评价四个mid_arm的姿态
+    body_cfg: SceneEntityCfg,       # 输入的单侧夹持臂机体(如 FM_24_link / BM_01_link)
+    mid_arms: list[str],            # 需要参与匹配的 mid_arm 关节名称列表
+    sigma: float = 0.1,             # 误差容忍度 (弧度)
 ) -> torch.Tensor:
     """
-    夹持臂角度与管道直径的匹配奖励, 通过从环境中得到当前夹持臂对应的管道直径, 
-    解算出理论最优的mid_arm角度值, 以此构建偏差越小奖励越大的函数
+    夹持臂角度与管道直径的匹配奖励.
+    
+    1. 根据 body_cfg 指定的机体在世界坐标系下的位置, 查询其当前所在管道段的直径 D.
+    2. 根据 MATLAB 拟合的六次多项式, 由 D 计算理论上最优的 mid_arm 夹持角度.
+    3. 计算当前 mid_arm 关节角度与目标角度的误差, 通过高斯核函数映射为奖励值.
     """
-    # 通过matlab获取的六次多项式模型参数:
-    # target_angle(dia) = -3.1762   38.3970 -184.8731  453.9609 -593.4035  408.7483  -85.6488
-    # 输入dia: 管道直径 mm/100, 如直径0.36m -> 3.6
-    # 输出target_angle: mid_arm的理论最优夹持角度，单位为度
-    pass
+    asset = env.scene[body_cfg.name]
+    
+    # 1. 获取该侧机体所在管道的局部信息
+    # get_cached_pipe_info 返回 [num_envs, 5]: (x_local, y_local, z_local, seg_id + axial_ratio, radial_ratio)
+    pipe_info = p_geom.get_cached_pipe_info(env, body_cfg)
+    
+    # 提取管段ID (整数部分)
+    seg_idx = pipe_info[:, 3].floor().long()
+    valid_mask_seg = seg_idx >= 0
+    safe_seg_idx = torch.clamp(seg_idx, min=0)
+    
+    # 2. 从 pipe_info 获取对应管段的直径 D (单位: 米)
+    # env._gpu_pipe_info 列: [编号, 类型, 直径D, 长度, 前端偏转, 后端偏转]
+    D_meters = env._gpu_pipe_info[safe_seg_idx, 2]
+    
+    # 转换为多项式输入尺度: 直径 mm/100 -> dm (decimeters)
+    dia = D_meters * 10.0
+    
+    # 3. 使用六次多项式计算理论最优角度 (单位: 度)
+    # target_angle(dia) = -3.1762*d^6 + 38.3970*d^5 - 184.8731*d^4 + 453.9609*d^3 - 593.4035*d^2 + 408.7483*d - 85.6488
+    c = [-3.1762, 38.3970, -184.8731, 453.9609, -593.4035, 408.7483, -85.6488]
+    target_angle_deg = (
+        c[0] * dia**6 +
+        c[1] * dia**5 + 
+        c[2] * dia**4 +
+        c[3] * dia**3 +
+        c[4] * dia**2 +
+        c[5] * dia +
+        c[6]
+    )
+    
+    # 减去装配偏置 57.63 度, 并转为弧度
+    target_angle_rad = torch.deg2rad(target_angle_deg - 57.63)
+    
+    # 4. 获取当前 mid_arm 关节的角度
+    # 通过 joint_names 查询 joint_ids, 适配不同机器人的关节命名
+    joint_ids = asset.find_joints(mid_arms)[0]  # [num_mid_arms]
+    current_angles = asset.data.joint_pos[:, joint_ids]  # [num_envs, num_mid_arms]
+    
+    # 将目标角度广播到所有 mid_arm
+    target_angles_rad_expanded = target_angle_rad.unsqueeze(1).expand_as(current_angles)
+    
+    # 5. 计算 W(err) 奖励: 高斯核函数
+    err = current_angles - target_angles_rad_expanded
+    reward = torch.exp(- (err ** 2) / (sigma ** 2))
+    
+    # 对多个 mid_arm 取平均
+    mean_reward = reward.mean(dim=1)
+    
+    # 如果没在有效管段上, 奖励为0
+    mean_reward = torch.where(valid_mask_seg, mean_reward, torch.zeros_like(mean_reward))
+    
+    return mean_reward
     
 
 @configclass
@@ -159,10 +212,27 @@ class RewardsCfg:
         weight=-0.3
     )
     
-    # 夹持角度匹配奖励: mid_arm的实际角度值与理论上管道直径->>夹持角度的映射关系越接近，奖励越高
-    # dia_match_reward = RewTerm(
-        
-    # )
+    # 前侧夹持臂角度匹配奖励 (基于 FM_24_link 位置查询管道直径)
+    front_dia_matched = RewTerm(
+        func=dia_matched_reward,
+        params={
+            "body_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
+            "mid_arms": ["mid_arm_03", "mid_arm_04"],
+            "sigma": 0.1,
+        },
+        weight=2.0
+    )
+
+    # 后侧夹持臂角度匹配奖励 (基于 BM_01_link 位置查询管道直径)
+    back_dia_matched = RewTerm(
+        func=dia_matched_reward,
+        params={
+            "body_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
+            "mid_arms": ["mid_arm_01", "mid_arm_02"],
+            "sigma": 0.1,
+        },
+        weight=2.0
+    )
 
     # -----------------------------
     # 3. 运动稳定性正则化 (Stability & Regularization)
