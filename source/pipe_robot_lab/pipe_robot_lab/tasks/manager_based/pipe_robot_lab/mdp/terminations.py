@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-30 11:02
 # Author: Vulcan
-# LastEditTime: 2026-04-09 22:07
+# LastEditTime: 2026-05-06 13:09
 # Description: 配置训练环境的终止检测函数
 # ==========
 import torch
@@ -139,8 +139,10 @@ def reach_goal_termination(
 @configclass
 class TerminationsCfg:
     # 终止函数需要返回一个布尔张量`num_envs`
-    # 基础超时终止
-    # time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    
+    # 1. 基础超时终止 (配合 episode_length_s)
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    
     # 2. 6个轮子全部脱离接触即重置
     
     lost_all_contacts = DoneTerm(
@@ -150,7 +152,7 @@ class TerminationsCfg:
             "sensor_names": ["touch_m1", "touch_m2", "touch_a1", "touch_a2", "touch_a3", "touch_a4"],
             "threshold": 0.05,  # 设置一个小的力阈值（牛顿），避免受到数值误差干扰
             "min_steps": 100,     # 给机器人 20 步的自由落体和与管道贴合的时间
-            "enabled": True,     # 临时关闭“全部脱离接触就重置”
+            "enabled": True,      # [改动] 开启掉管重置：学夹持的前提是不能掉下去
         }
     )
     
@@ -160,7 +162,7 @@ class TerminationsCfg:
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
             "min_steps": 100,
-            "enabled": True,
+            "enabled": False,
         }
     )
     
@@ -173,6 +175,6 @@ class TerminationsCfg:
             "distance_threshold": 0.08,    # 最大漂移范围：0.05米（即5cm）
             "max_steps": 120,    # 卡死时限：依据你的dt（例如100个step = 1秒，这里设成两秒半左右）
             "min_steps": 30,
-            "enabled": True,
+            "enabled": False,
         }
     )

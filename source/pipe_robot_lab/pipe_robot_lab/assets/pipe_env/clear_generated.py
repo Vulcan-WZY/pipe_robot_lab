@@ -47,6 +47,8 @@ class PipeEnvCleaner:
 
 # 单元测试 (仅当直接运行此文件时执行)
 if __name__ == "__main__":
+    import sys
+    
     cfg = PipeEnvCleaner()
     MESHES_PATH = os.path.join(CURRENT_DIR, cfg.generation.meshes_path)
     JSON_PATH = os.path.join(CURRENT_DIR, cfg.generation.json_path)
@@ -55,38 +57,59 @@ if __name__ == "__main__":
     json_dir = Path(JSON_PATH)
     usd_dir = Path(USD_PATH)
     
+    # 检查是否传入了编号闭区间范围参数
+    start_id, end_id = None, None
+    if len(sys.argv) >= 3:
+        try:
+            start_id = int(sys.argv[1])
+            end_id = int(sys.argv[2])
+            print(f"Targeting specific ID range: [{start_id}, {end_id}]")
+        except ValueError:
+            print("Invalid range arguments, will clean all generated files.")
+    
     print(f"Target Meshes Path: {MESHES_PATH}")
     print(f"Target JSON Path: {JSON_PATH}")
     print(f"Target USD Path: {USD_PATH}")
     
+    def should_delete(p: Path) -> bool:
+        if not p.stem.isdigit():
+            return False
+        if start_id is not None and end_id is not None:
+            obj_id = int(p.stem)
+            return start_id <= obj_id <= end_id
+        return True
+
     # 1. 清理 JSON 文件
     json_count = 0
     if json_dir.exists():
         for json_file in json_dir.glob("*.json"):
-            try:
-                json_file.unlink()
-                json_count += 1
-            except Exception as e:
-                print(f"Failed to delete {json_file}: {e}")
+            if should_delete(json_file):
+                try:
+                    json_file.unlink()
+                    json_count += 1
+                except Exception as e:
+                    print(f"Failed to delete {json_file}: {e}")
     
     # 2. 清理 STL 文件 (保留 stand_pipe.STL)
     stl_count = 0
     if mesh_dir.exists():
         for stl_file in mesh_dir.glob("*.STL"):            
-            try:
-                stl_file.unlink()
-                stl_count += 1
-            except Exception as e:
-                print(f"Failed to delete {stl_file}: {e}")
+            if should_delete(stl_file):
+                try:
+                    stl_file.unlink()
+                    stl_count += 1
+                except Exception as e:
+                    print(f"Failed to delete {stl_file}: {e}")
     # 3. 清理 USD 文件
     usd_count = 0
     if usd_dir.exists():
         for usd_file in usd_dir.glob("*.usd"):
-            try:
-                usd_file.unlink()
-                usd_count += 1
-            except Exception as e:
-                print(f"Failed to delete {usd_file}: {e}")
+            if should_delete(usd_file):
+                try:
+                    usd_file.unlink()
+                    usd_count += 1
+                except Exception as e:
+                    print(f"Failed to delete {usd_file}: {e}")
                 
     print(f"\nCleanup Complete!")
     print(f"Deleted {json_count} JSON files.")

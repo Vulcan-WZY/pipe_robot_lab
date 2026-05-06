@@ -1,1 +1,1 @@
-python ./source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/clear_generated.py  
+python ./source/pipe_robot_lab/pipe_robot_lab/assets/pipe_env/clear_generated.py "$@"  

@@ -447,10 +447,14 @@ class PiprRobotDemo:
         for term_name in term_names:
             w = term_weights.get(term_name, None)
             w_str = f"w={w:.3f}" if w is not None else "w=?"
+            
+            # 高亮显示当前正在调试测试的新增奖励项
+            highlight = "⭐ " if "dia_matched" in term_name else "   "
+            
             if term_name in term_values:
-                print(f"    - {term_name:<24} ({w_str}): {term_values[term_name]:.4f}")
+                print(f"  {highlight} - {term_name:<24} ({w_str}): {term_values[term_name]:.4f}")
             else:
-                print(f"    - {term_name:<24} ({w_str}): N/A")
+                print(f"  {highlight} - {term_name:<24} ({w_str}): N/A")
 
         if source.startswith("extras") and isinstance(extras, dict) and not term_values:
             print(f"  > [Reward Terms] extras keys: {list(extras.keys())}")
@@ -477,7 +481,7 @@ class PiprRobotDemo:
             print("[INFO] Environment Reset Triggered.")
 
         count = 0
-        print_interval = 1000
+        print_interval = 20
         import time
         start_time = time.time()
         while simulation_app.is_running():

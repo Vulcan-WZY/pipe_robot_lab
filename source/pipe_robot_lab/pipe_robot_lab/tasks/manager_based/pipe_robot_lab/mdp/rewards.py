@@ -155,24 +155,32 @@ class RewardsCfg:
     # -----------------------------
     # 1. 引导走向终点 (Task Progress)
     # -----------------------------
+    
+    # 生存超时结算奖励 (当成功活完设定的最大限制步数时，获取一笔大额正向鼓励)
+    survival_bonus = RewTerm(
+        func=mdp.is_terminated_term,
+        params={"term_name": "time_out"},  # 对应 terminations 里的那个 time_out 终止判定
+        weight=200.0,                      # 你可以按需放大或缩小这一重赏数值
+    )
+    
     # 最大里程奖励 (根据配置，取机器人前端 FM_24_link 前进数值最准确)
     progress_reward = RewTerm(
         func=axial_progress_reward,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"])},
-        weight=500.0  # 放大前进信号，提升每步有效梯度
+        weight=0.0  # [改动] 初期不要求前进，设为0防止干扰夹持策略
     )
     
     # 时间流逝惩罚 (让其尽量少花时间)
     alive_penalty = RewTerm(
         func=mdp.is_alive,
-        weight = 0.03  # 0409: 改为正值, -0.08
+        weight = 0.03  # 活得越久分越高，与 survival_bonus 一起鼓励不掉落
     )
     
     # 任务奖励：到达终点
     reach_target_bonus = RewTerm(
         func=mdp.is_terminated_term,
         params={"term_keys": ["reach_goal_reset"]}, 
-        weight=300.0  # 终点奖励与放大后的过程奖励保持比例
+        weight=0.0  # [改动] 初期不用管终点
     )
     
     # 任务惩罚：掉出管外（可选）

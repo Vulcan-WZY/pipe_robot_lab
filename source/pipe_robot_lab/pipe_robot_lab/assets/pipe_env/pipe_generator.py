@@ -14,7 +14,7 @@ from pathlib import Path
 # 全局配置开关
 # ==========================================
 ENABLE_VISUALIZATION = True  # 是否在生成时实时显示 3D 网格
-VISUALIZATION_PAUSE_TIME = 1.0  # 每个网格显示的停留时间（秒）
+VISUALIZATION_PAUSE_TIME = 0.5  # 每个网格显示的停留时间（秒）
 # ==========================================
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -354,10 +354,18 @@ if __name__ == "__main__":
     # 获取当前已经存在的文件数量，以免编号重复
     mesh_dir = Path(MESHES_PATH)
     json_dir = Path(JSON_PATH)
+    usd_dir = Path(os.path.join(CURRENT_DIR, cfg.generation.usd_path))
     mesh_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
     json_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在，避免首次运行报错
-    existing_ids = (int(p.stem) for p in mesh_dir.glob("*.STL") if p.stem.isdigit())
-    start_id = max(existing_ids, default=0) + 1 # 这里不用+1 因为对应路径下放的有一个stand_pipe.STL
+    usd_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 综合考虑 STL, JSON, USD 文件夹中的现有最大编号
+    existing_stl_ids = [int(p.stem) for p in mesh_dir.glob("*.STL") if p.stem.isdigit()]
+    existing_json_ids = [int(p.stem) for p in json_dir.glob("*.json") if p.stem.isdigit()]
+    existing_usd_ids = [int(p.stem) for p in usd_dir.glob("*.usd") if p.stem.isdigit()]
+    all_existing_ids = existing_stl_ids + existing_json_ids + existing_usd_ids
+    
+    start_id = max(all_existing_ids, default=0) + 1 # 从最大已有编号的下一个开始生成
     
     
     # 打印一些配置的信息

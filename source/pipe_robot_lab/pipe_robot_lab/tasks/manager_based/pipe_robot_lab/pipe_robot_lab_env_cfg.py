@@ -20,13 +20,36 @@ import os
 import random
 import glob
 import json
+import yaml
 import torch
 # 定位到生成器产生的管道路径
 from pipe_robot_lab.assets.pipe_env.pipe_generator import CURRENT_DIR
 MESHES_DIR = os.path.join(CURRENT_DIR, "usd")
 JSON_DIR = os.path.join(CURRENT_DIR, "json")
-# 获取所有生成的 STL 文件 (排除模板文件 stand_pipe.STL)
-all_pipe_stls = [p for p in glob.glob(os.path.join(MESHES_DIR, "*.usd"))]
+
+# 读取 auto_train.yaml 中配置的区间以过滤管道 ID (动态课程学习支持)
+AUTO_TRAIN_YAML = os.path.abspath(os.path.join(CURRENT_DIR, "../../../../../sh/config/auto_train.yaml"))
+filter_range = None
+if os.path.exists(AUTO_TRAIN_YAML):
+    try:
+        with open(AUTO_TRAIN_YAML, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f)
+            filter_range = cfg.get("training", {}).get("env_pipe_id_range", None)
+    except Exception as e:
+        print(f"[Warning] Could not parse pipe ID range from auto_train.yaml: {e}")
+
+# 获取所有生成的 USD 文件 (排除模板文件 stand_pipe), 并按照区间过滤
+all_pipe_stls = []
+for p in glob.glob(os.path.join(MESHES_DIR, "*.usd")):
+    stem = os.path.splitext(os.path.basename(p))[0]
+    if stem.isdigit():
+        obj_id = int(stem)
+        if filter_range is not None and len(filter_range) == 2:
+            if filter_range[0] <= obj_id <= filter_range[1]:
+                all_pipe_stls.append(p)
+        else:
+            all_pipe_stls.append(p)
+
 # 随机选择一个管道 (如果文件夹为空则给个默认空字符串防报错)
 SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
 # 推导出对应的 JSON 文件路径
@@ -201,7 +224,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 3, env_spacing = 4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 1, env_spacing = 4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -218,13 +241,13 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self) -> None:
         """Post initialization."""
         # general settings
-        self.episode_length_s = 60
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings
         self.decimation = 2                         # 抽帧倍数 (控制渲染频率，降低CPU/GPU负载), 
         # 同时也决定了Agent的控制频率 (control_freq = sim_freq / decimation = 100 / 2 = 50Hz)
         self.sim.dt = 1 / 100                       # 物理仿真时间步长(底层物理引擎每0.01秒更新一次)
+        self.episode_length_s = 12.0 # 12秒 * 50Hz (控制步频) = 恰好600步
         self.sim.render_interval = self.decimation
         
         self.sim.physx.bounce_threshold_velocity = 0.2
