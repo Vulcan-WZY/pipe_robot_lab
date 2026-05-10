@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-05 23:49
+# LastEditTime: 2026-05-09 10:13
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -159,7 +159,7 @@ class RewardsCfg:
     # 生存超时结算奖励 (当成功活完设定的最大限制步数时，获取一笔大额正向鼓励)
     survival_bonus = RewTerm(
         func=mdp.is_terminated_term,
-        params={"term_name": "time_out"},  # 对应 terminations 里的那个 time_out 终止判定
+        params={"term_keys": ["time_out"]},  # [修复] 参数名是 term_keys，并且值是一个列表
         weight=200.0,                      # 你可以按需放大或缩小这一重赏数值
     )
     
@@ -201,24 +201,24 @@ class RewardsCfg:
     # 2. 运动技能 (Motion Skills)
     # -----------------------------
     # 前夹持臂姿态对齐 (条件掩码)
-    front_posture_alignment = RewTerm(
-        func=conditional_posture_penalty,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
-            "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")] 
-        },
-        weight=-0.3
-    )
+    # front_posture_alignment = RewTerm(
+    #     func=conditional_posture_penalty,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
+    #         "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")] 
+    #     },
+    #     weight=-0.3
+    # )
     
-    # 后夹持臂姿态对齐 (条件掩码)
-    back_posture_alignment = RewTerm(
-        func=conditional_posture_penalty,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
-            "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")] 
-        },
-        weight=-0.3
-    )
+    # # 后夹持臂姿态对齐 (条件掩码)
+    # back_posture_alignment = RewTerm(
+    #     func=conditional_posture_penalty,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
+    #         "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")] 
+    #     },
+    #     weight=-0.3
+    # )
     
     # 前侧夹持臂角度匹配奖励 (基于 FM_24_link 位置查询管道直径)
     front_dia_matched = RewTerm(

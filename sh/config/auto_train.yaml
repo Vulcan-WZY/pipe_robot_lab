@@ -1,14 +1,14 @@
 # ===========
 # Date: 2026-05-05 14:23
 # Author: Vulcan
-# LastEditTime: 2026-05-07 00:45
+# LastEditTime: 2026-05-07 07:17
 # Description: PPO训练的自动化配置文件，定义了训练框架、任务、环境数量、迭代次数等关键参数，以及Isaac Lab的渲染设置和Checkpoint的存储路径与续训选项。
 # ==========
 training:
     framework: "skrl"                     # 训练框架支持选择 (skrl 或 rsl_rl)
     task: "Template-Pipe-Robot-Lab-v1"    # 训练任务的注册名 (根据你的环境注册码修改)
-    num_envs: 8                          # 开启的并行环境数量 (针对少量显存, 推荐32-64)
-    max_iterations_per_round: 200         # 每轮在一个管道上训练的最大 PPO 迭代次数 (依模型稳定速度而定, 到此数值后模型保存退出)
+    num_envs: 1                          # 开启的并行环境数量 (针对少量显存, 推荐32-64)
+    max_iterations_per_round: 100         # 每轮在一个管道上训练的最大 PPO 迭代次数 (依模型稳定速度而定, 到此数值后模型保存退出)
     # 环境底层默认rollout为32, 也即收集机器人走的32步数据后进行一次PPO更新, 因此每轮训练的总迭代次数 = max_iterations_per_round * num_envs, 例如 20 * 2 = 40 迭代
     total_rounds: 100                     # 总共“重启环境换管子”的循环轮数
     # 因此训练总迭代次数 = max_iterations_per_round * total_rounds, 例如 150 * 500 = 75000 迭代
@@ -22,5 +22,5 @@ isaaclab:
 checkpointing:
     log_root_dir: "logs/skrl/ppo_auto_02"  # Tensorboard 日志与 Checkpoint 存放的根目录
     resume_from_latest: true              # 若开启，自动扫描 `log_root_dir` 下最新修改的 `.pt` 权重文件进行断点续训接力
-    saves_per_round: 4                    # 每小轮训练保存模型的次数 (例如配为2, 则在小轮中间和结束各保存一次)
-    keep_max_pt_files: 5                  # 硬盘清理：将所有训练合并为单一连续任务后，文件夹内仅保留最新的前 5 个 `.pt` 权重文件，其余旧权重自动删除以节约开销(不会删除best_agent)
+    saves_per_round: 2                    # 每小轮训练保存模型的次数 (例如配为2, 则在小轮中间和结束各保存一次)
+    keep_max_pt_files: 4                  # 硬盘清理：将所有训练合并为单一连续任务后，文件夹内仅保留最新的前 5 个 `.pt` 权重文件，其余旧权重自动删除以节约开销(不会删除best_agent)
