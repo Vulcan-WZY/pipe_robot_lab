@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-09 10:13
+# LastEditTime: 2026-05-10 18:52
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -86,7 +86,9 @@ def dia_matched_reward(
     env: ManagerBasedRLEnv,
     body_cfg: SceneEntityCfg,       # 输入的单侧夹持臂机体(如 FM_24_link / BM_01_link)
     mid_arms: list[str],            # 需要参与匹配的 mid_arm 关节名称列表
-    sigma: float = 0.1,             # 误差容忍度 (弧度)
+    sensor_cfgs: list[SceneEntityCfg],  # 该侧对应的接触传感器列表
+    sigma: float = 0.4,             # 误差容忍度 (弧度)
+    min_contact: int = 2,           # 至少有几个轮子接触时才启用此奖励
 ) -> torch.Tensor:
     """
     夹持臂角度与管道直径的匹配奖励.
@@ -94,11 +96,18 @@ def dia_matched_reward(
     1. 根据 body_cfg 指定的机体在世界坐标系下的位置, 查询其当前所在管道段的直径 D.
     2. 根据 MATLAB 拟合的六次多项式, 由 D 计算理论上最优的 mid_arm 夹持角度.
     3. 计算当前 mid_arm 关节角度与目标角度的误差, 通过高斯核函数映射为奖励值.
+    4. 仅在该侧接触轮数 >= min_contact 时才给出奖励信号, 避免空中无意义梯度.
     """
     asset = env.scene[body_cfg.name]
     
+    # 0. 接触数条件掩码
+    contact_count = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    for cfg in sensor_cfgs:
+        force_mag = torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1, p=2).view(env.num_envs)
+        contact_count += (force_mag > 1.0).to(torch.float32)
+    contact_mask = contact_count >= min_contact
+    
     # 1. 获取该侧机体所在管道的局部信息
-    # get_cached_pipe_info 返回 [num_envs, 5]: (x_local, y_local, z_local, seg_id + axial_ratio, radial_ratio)
     pipe_info = p_geom.get_cached_pipe_info(env, body_cfg)
     
     # 提取管段ID (整数部分)
@@ -107,14 +116,12 @@ def dia_matched_reward(
     safe_seg_idx = torch.clamp(seg_idx, min=0)
     
     # 2. 从 pipe_info 获取对应管段的直径 D (单位: 米)
-    # env._gpu_pipe_info 列: [编号, 类型, 直径D, 长度, 前端偏转, 后端偏转]
     D_meters = env._gpu_pipe_info[safe_seg_idx, 2]
     
     # 转换为多项式输入尺度: 直径 mm/100 -> dm (decimeters)
     dia = D_meters * 10.0
     
     # 3. 使用六次多项式计算理论最优角度 (单位: 度)
-    # target_angle(dia) = -3.1762*d^6 + 38.3970*d^5 - 184.8731*d^4 + 453.9609*d^3 - 593.4035*d^2 + 408.7483*d - 85.6488
     c = [-3.1762, 38.3970, -184.8731, 453.9609, -593.4035, 408.7483, -85.6488]
     target_angle_deg = (
         c[0] * dia**6 +
@@ -130,9 +137,8 @@ def dia_matched_reward(
     target_angle_rad = torch.deg2rad(target_angle_deg - 57.63)
     
     # 4. 获取当前 mid_arm 关节的角度
-    # 通过 joint_names 查询 joint_ids, 适配不同机器人的关节命名
-    joint_ids = asset.find_joints(mid_arms)[0]  # [num_mid_arms]
-    current_angles = asset.data.joint_pos[:, joint_ids]  # [num_envs, num_mid_arms]
+    joint_ids = asset.find_joints(mid_arms)[0]
+    current_angles = asset.data.joint_pos[:, joint_ids]
     
     # 将目标角度广播到所有 mid_arm
     target_angles_rad_expanded = target_angle_rad.unsqueeze(1).expand_as(current_angles)
@@ -147,7 +153,37 @@ def dia_matched_reward(
     # 如果没在有效管段上, 奖励为0
     mean_reward = torch.where(valid_mask_seg, mean_reward, torch.zeros_like(mean_reward))
     
+    # 接触数不足时屏蔽奖励
+    mean_reward = torch.where(contact_mask, mean_reward, torch.zeros_like(mean_reward))
+    
     return mean_reward
+
+
+def steer_wheel_action_penalty(
+    env: ManagerBasedRLEnv,
+    action_indices: list[int],
+) -> torch.Tensor:
+    """
+    惩罚舵轮动作维度的输出幅值, 用于在夹持课程阶段锁定轮子不动.
+    action_indices: 舵轮动作在整个动作向量中的维度索引列表.
+    """
+    actions = env.action_manager.action
+    wheel_actions = actions[:, action_indices]
+    return torch.sum(wheel_actions ** 2, dim=-1)
+
+
+def bend_deviation_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    joint_names: list[str],
+) -> torch.Tensor:
+    """
+    惩罚 bend 关节偏离初始零位的幅度, 用于在夹持课程阶段冻结弯折自由度.
+    """
+    asset = env.scene[asset_cfg.name]
+    joint_ids = asset.find_joints(joint_names)[0]
+    joint_pos = asset.data.joint_pos[:, joint_ids]
+    return torch.sum(joint_pos ** 2, dim=-1)
     
 
 @configclass
@@ -159,8 +195,8 @@ class RewardsCfg:
     # 生存超时结算奖励 (当成功活完设定的最大限制步数时，获取一笔大额正向鼓励)
     survival_bonus = RewTerm(
         func=mdp.is_terminated_term,
-        params={"term_keys": ["time_out"]},  # [修复] 参数名是 term_keys，并且值是一个列表
-        weight=200.0,                      # 你可以按需放大或缩小这一重赏数值
+        params={"term_keys": ["time_out"]},
+        weight=50.0,
     )
     
     # 最大里程奖励 (根据配置，取机器人前端 FM_24_link 前进数值最准确)
@@ -226,7 +262,9 @@ class RewardsCfg:
         params={
             "body_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
             "mid_arms": ["mid_arm_03", "mid_arm_04"],
-            "sigma": 0.1,
+            "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")],
+            "sigma": 0.4,
+            "min_contact": 2,
         },
         weight=2.0
     )
@@ -237,7 +275,9 @@ class RewardsCfg:
         params={
             "body_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
             "mid_arms": ["mid_arm_01", "mid_arm_02"],
-            "sigma": 0.1,
+            "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")],
+            "sigma": 0.4,
+            "min_contact": 2,
         },
         weight=2.0
     )
@@ -276,8 +316,27 @@ class RewardsCfg:
                 SceneEntityCfg("touch_a4"),
             ],
             "threshold": 1.0,
-            "min_steps": 200,
+            "min_steps": 100,
             "no_contact_value": -6.0,
         },
-        weight=2.0
+        weight=0.5
+    )
+    
+    # 舵轮动作惩罚: 夹持课程阶段锁定轮子不输出动作
+    steer_wheel_lock = RewTerm(
+        func=steer_wheel_action_penalty,
+        params={
+            "action_indices": list(range(0, 12)),
+        },
+        weight=-5.0
+    )
+    
+    # 弯折偏离惩罚: 夹持课程阶段冻结 bend 自由度
+    bend_lock = RewTerm(
+        func=bend_deviation_penalty,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "joint_names": ["bend_01", "bend_02"],
+        },
+        weight=-3.0
     )

@@ -13,7 +13,7 @@ from pathlib import Path
 # ==========================================
 # 全局配置开关
 # ==========================================
-ENABLE_VISUALIZATION = True  # 是否在生成时实时显示 3D 网格
+ENABLE_VISUALIZATION = False  # 是否在生成时实时显示 3D 网格
 VISUALIZATION_PAUSE_TIME = 0.5  # 每个网格显示的停留时间（秒）
 # ==========================================
 

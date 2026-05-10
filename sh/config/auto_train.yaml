@@ -1,23 +1,21 @@
 # ===========
 # Date: 2026-05-05 14:23
 # Author: Vulcan
-# LastEditTime: 2026-05-07 07:17
+# LastEditTime: 2026-05-10 19:22
 # Description: PPO训练的自动化配置文件，定义了训练框架、任务、环境数量、迭代次数等关键参数，以及Isaac Lab的渲染设置和Checkpoint的存储路径与续训选项。
 # ==========
 training:
-    framework: "skrl"                     # 训练框架支持选择 (skrl 或 rsl_rl)
-    task: "Template-Pipe-Robot-Lab-v1"    # 训练任务的注册名 (根据你的环境注册码修改)
-    num_envs: 1                          # 开启的并行环境数量 (针对少量显存, 推荐32-64)
-    max_iterations_per_round: 100         # 每轮在一个管道上训练的最大 PPO 迭代次数 (依模型稳定速度而定, 到此数值后模型保存退出)
-    # 环境底层默认rollout为32, 也即收集机器人走的32步数据后进行一次PPO更新, 因此每轮训练的总迭代次数 = max_iterations_per_round * num_envs, 例如 20 * 2 = 40 迭代
-    total_rounds: 100                     # 总共“重启环境换管子”的循环轮数
-    # 因此训练总迭代次数 = max_iterations_per_round * total_rounds, 例如 150 * 500 = 75000 迭代
-    env_pipe_id_range: [91, 170]            # 课程学习系统专用: 指定在运行时从中随机采样的USD管道资产编号闭区间, 如 [30, 40]
+    framework: "skrl"
+    task: "Template-Pipe-Robot-Lab-v1"
+    num_envs: 2
+    max_iterations_per_round: 400
+    total_rounds: 100
+    env_pipe_id_range: [91, 170]
 
 isaaclab:
-    headless: false                        # 是否开启无头模式
-    video: false                          # 是否在训练期间录制视频
-    video_interval: 2000                  # 录制视频的步数间隔
+    headless: false
+    video: false
+    video_interval: 2000
 
 checkpointing:
     log_root_dir: "logs/skrl/ppo_auto_02"  # Tensorboard 日志与 Checkpoint 存放的根目录

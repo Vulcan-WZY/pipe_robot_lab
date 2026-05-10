@@ -33,6 +33,8 @@ class CustomActorCritic(Model):
         Model.__init__(self, observation_space=observation_space, action_space=action_space, device=device, **kwargs)
         
         self.is_critic = is_critic
+        self._cam_h = None
+        self._cam_w = None
 
         # ====== A. 高级视觉特征提取器 (ResNet-like) ======
         # 相比原先的直连CNN，增加 GroupNorm 和残差连接，大幅提升深度图几何特征的提取能力
@@ -67,7 +69,10 @@ class CustomActorCritic(Model):
             cam_h = front_depth_space.shape[1]
             cam_w = front_depth_space.shape[2]
         else:
-            cam_h, cam_w = 64, 64
+            cam_h, cam_w = 60, 80
+        
+        self._cam_h = cam_h
+        self._cam_w = cam_w
             
         with torch.no_grad():
             cnn_backbone_dim = self.cnn(torch.zeros(1, 2, cam_h, cam_w)).shape[-1]
@@ -142,25 +147,41 @@ class CustomActorCritic(Model):
     def compute(self, inputs, role=""):
         obs_dict = inputs["states"]
         if torch.is_tensor(obs_dict):
-            # tensor_to_space was incorrectly returning something or nothing.
             from skrl.utils.spaces.torch import unflatten_tensorized_space
             obs_dict = unflatten_tensorized_space(self.observation_space, obs_dict)
 
-        img_front = obs_dict["camera"]["depth_front"]
-        img_back = obs_dict["camera"]["depth_back"]
+        batch_size = next(iter(inputs.values())).shape[0] if torch.is_tensor(next(iter(inputs.values()))) else 1
 
-        img_front = torch.nan_to_num(img_front, nan=0.0, posinf=10.0, neginf=0.0)
-        img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
-        img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
-        img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
+        camera_data = obs_dict.get("camera", None) if isinstance(obs_dict, dict) else None
+        if camera_data is not None and isinstance(camera_data, dict):
+            img_front = camera_data.get("depth_front", None)
+            img_back = camera_data.get("depth_back", None)
+        else:
+            img_front = None
+            img_back = None
+
+        if img_front is None or img_back is None:
+            device = self.output_layer.weight.device
+            img_front = torch.zeros(batch_size, 1, self._cam_h, self._cam_w, device=device)
+            img_back = torch.zeros(batch_size, 1, self._cam_h, self._cam_w, device=device)
+        else:
+            img_front = torch.nan_to_num(img_front, nan=0.0, posinf=10.0, neginf=0.0)
+            img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
+            img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
+            img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
         
         img_input = torch.cat([img_front, img_back], dim=1)
         vision_features = self.vision_proj(self.cnn(img_input))
 
-        if self.is_critic and "critic" in obs_dict:
+        if self.is_critic and isinstance(obs_dict, dict) and "critic" in obs_dict:
             prop_input = obs_dict["critic"]
-        else:
+        elif isinstance(obs_dict, dict) and "policy" in obs_dict:
             prop_input = obs_dict["policy"]
+        else:
+            policy_space = _get_subspace(self.observation_space, "policy")
+            prop_dim = compute_space_size(policy_space) if policy_space is not None else 100
+            device = self.output_layer.weight.device
+            prop_input = torch.zeros(batch_size, prop_dim, device=device)
         
         prop_features = self.proprioception_mlp(prop_input)
 

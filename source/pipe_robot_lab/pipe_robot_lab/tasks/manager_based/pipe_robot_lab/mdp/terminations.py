@@ -148,11 +148,10 @@ class TerminationsCfg:
     lost_all_contacts = DoneTerm(
         func=no_contact_termination,
         params={
-            # 传入你在 scene 中注册的那6个接触传感器的名称
             "sensor_names": ["touch_m1", "touch_m2", "touch_a1", "touch_a2", "touch_a3", "touch_a4"],
-            "threshold": 0.05,  # 设置一个小的力阈值（牛顿），避免受到数值误差干扰
-            "min_steps": 100,     # 给机器人 20 步的自由落体和与管道贴合的时间
-            "enabled": True,      # [改动] 开启掉管重置：学夹持的前提是不能掉下去
+            "threshold": 0.05,
+            "min_steps": 50,
+            "enabled": True,
         }
     )
     

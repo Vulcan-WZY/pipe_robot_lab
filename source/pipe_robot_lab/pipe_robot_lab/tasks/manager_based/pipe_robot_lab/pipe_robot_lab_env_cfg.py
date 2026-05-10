@@ -149,32 +149,32 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
     
     back_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/BM_02_link_cam/cam_back",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)),
         update_period=0.1,  # 10Hz
-        height=120,
-        width=160,
-        data_types=["depth"],  # Intel D435i 深度流
-        debug_vis=False, # 会导致 IsaacLab 每一帧都把带深度图结果的 UI viewport 画出来并强制渲染到主窗口上
+        height=60,
+        width=80,
+        data_types=["depth"],
+        debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
-            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
-            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
-            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+            focal_length=1.93,
+            horizontal_aperture=3.8,
+            vertical_aperture=2.39,
+            clipping_range=(0.1, 10.0),
         ),
     )
     front_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/FM_25_link_cam/cam_front",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)),
         update_period=0.1,  # 10Hz
-        height=120,
-        width=160,
-        data_types=["depth"],  # Intel D435i 深度流
+        height=60,
+        width=80,
+        data_types=["depth"],
         debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
-            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
-            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
-            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+            focal_length=1.93,
+            horizontal_aperture=3.8,
+            vertical_aperture=2.39,
+            clipping_range=(0.1, 10.0),
         ),
     )
     # back_imu = ImuCfg(
@@ -224,7 +224,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
 @configclass
 class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 1, env_spacing = 4.0)
+    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs = 16, env_spacing = 4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -247,7 +247,7 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 2                         # 抽帧倍数 (控制渲染频率，降低CPU/GPU负载), 
         # 同时也决定了Agent的控制频率 (control_freq = sim_freq / decimation = 100 / 2 = 50Hz)
         self.sim.dt = 1 / 100                       # 物理仿真时间步长(底层物理引擎每0.01秒更新一次)
-        self.episode_length_s = 12.0 # 12秒 * 50Hz (控制步频) = 恰好600步
+        self.episode_length_s = 5.0
         self.sim.render_interval = self.decimation
         
         self.sim.physx.bounce_threshold_velocity = 0.2
@@ -279,4 +279,3 @@ class PipeRobotLabEnvCfg(ManagerBasedRLEnvCfg):
         
         # 将 DebugCfg 注册进环境以便测试框架拾取
         # self.observations.debug = ObservationsCfg.DebugCfg()
-        
