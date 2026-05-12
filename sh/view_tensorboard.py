@@ -1,3 +1,9 @@
+# ===========
+# Date: 2026-05-08 09:19
+# Author: Vulcan
+# LastEditTime: 2026-05-12 21:57
+# Description: 
+# ==========
 import os
 import yaml
 import subprocess
@@ -25,6 +31,12 @@ def main():
     print(f"\n[INFO] 📊 Launching TensorBoard pointing to: {log_root_dir}")
     print("[INFO] Any separated running logs within this folder will be plotted simultaneously!")
     print("[INFO] Press Ctrl+C to stop TensorBoard.\n")
+    
+    tailscale_ip = subprocess.run(
+        ["tailscale", "ip", "-4"], capture_output=True, text=True
+    ).stdout.strip()
+    if tailscale_ip:
+        print(f"\033[1;31m[INFO] 🌐 Use This !!!!! Access from remote: http://{tailscale_ip}:6006\033[0m")
     
     cmd = ["tensorboard", "--logdir", log_root_dir, "--bind_all"]
     

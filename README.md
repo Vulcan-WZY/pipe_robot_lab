@@ -18,6 +18,13 @@
 
 # 仓库部署流程
 
+## 必要包版本
+
+| name | version |
+| ---- | ------- |
+| SKRL | 2.0.0   |
+|      |         |
+
 ## 安装IsaacLab环境
 
 1. 创建conda环境: conda create -n isaaclab python=3.11 -y
@@ -152,14 +159,33 @@ $$
 | max_iterations_per_round | 100   | 400  | 单管上给策略充分探索时间 |
 | headless                 | false | true | 无头模式提升训练吞吐     |
 
-1
+### 0512
 
-1
+#### 修复多轮训练 timestep 编号冲突
 
-1
+**问题**: SKRL 新版本的 Trainer 循环硬编码 `range(self.cfg.timesteps)`，始终从 0 开始计数，导致每个小轮训练都从 timestep=0 开始，TensorBoard 数据相互覆盖。
 
-1
+**解决方案**:
 
-1
+1. `trainer["timesteps"]` 只设为本轮的增量步数，不再累加历史步数
+2. 通过 monkey-patch Agent 的 `write_tracking_data` 和 `write_checkpoint` 方法，注入全局 timestep 偏移量
 
-1
+效果: 每轮进度条只跑本轮增量步数，TensorBoard x 轴全局连续，checkpoint 文件名包含全局编号。
+
+#### 持久化训练会话 (tmux)
+
+**需求**: 通过 Tailscale 远程启动训练后，断联不影响训练进程，重连后可查看进度或停止训练。
+
+**方案**: 将 `start_curriculum.sh` 改造为基于 tmux 的会话管理脚本，同时自动启动 TensorBoard 后台会话。
+
+**使用方法**:
+
+| 命令                                | 作用                          |
+| ----------------------------------- | ----------------------------- |
+| `./sh/start_curriculum.sh`        | 启动后台训练 + TensorBoard    |
+| `./sh/start_curriculum.sh attach` | 连接到训练终端查看实时进度条  |
+| `./sh/start_curriculum.sh tb`     | 连接到 TensorBoard 终端       |
+| `./sh/start_curriculum.sh status` | 查看训练和TensorBoard运行状态 |
+| `./sh/start_curriculum.sh stop`   | 终止训练和TensorBoard         |
+
+**关键操作**: 在 attach 进入 tmux 会话后，按 `Ctrl+B` 再按 `D` 可安全脱离会话（训练继续运行）。

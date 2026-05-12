@@ -97,7 +97,8 @@ class CustomActorCritic(Model):
             if critic_space is not None:
                 policy_dim = compute_space_size(critic_space)
         
-        # 增加网络深度和宽度，最关键的是加入 LayerNorm 防止不同量纲的状态引爆梯度
+        self._prop_dim = policy_dim
+        
         self.proprioception_mlp = nn.Sequential(
             nn.Linear(policy_dim, 512),
             nn.LayerNorm(512),
@@ -175,13 +176,11 @@ class CustomActorCritic(Model):
 
         if self.is_critic and isinstance(obs_dict, dict) and "critic" in obs_dict:
             prop_input = obs_dict["critic"]
-        elif isinstance(obs_dict, dict) and "policy" in obs_dict:
+        elif not self.is_critic and isinstance(obs_dict, dict) and "policy" in obs_dict:
             prop_input = obs_dict["policy"]
         else:
-            policy_space = _get_subspace(self.observation_space, "policy")
-            prop_dim = compute_space_size(policy_space) if policy_space is not None else 100
             device = self.output_layer.weight.device
-            prop_input = torch.zeros(batch_size, prop_dim, device=device)
+            prop_input = torch.zeros(batch_size, self._prop_dim, device=device)
         
         prop_features = self.proprioception_mlp(prop_input)
 
@@ -189,7 +188,7 @@ class CustomActorCritic(Model):
         latent_features = self.fusion_mlp(fused_features)
 
         if not self.is_critic:
-            return self.output_layer(latent_features), self.log_std_parameter, {}
+            return self.output_layer(latent_features), {"log_std": self.log_std_parameter}
         else:
             return self.output_layer(latent_features), {}
 

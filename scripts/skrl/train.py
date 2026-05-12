@@ -157,7 +157,6 @@ class VisionIsaacLabWrapper(Wrapper):
     def state_space(self):
         return None
 
-    @property
     def state(self):
         return None
 
@@ -238,11 +237,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # max iterations for training
     if args_cli.max_iterations:
         additional_timesteps = args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
-        agent_cfg["trainer"]["timesteps"] = start_timestep + additional_timesteps
-        print(f"[INFO] 🎯 Training target: reach {agent_cfg['trainer']['timesteps']} timesteps ({additional_timesteps} new steps expected).")
-        
-    # **关键修复**：将起点的真实时间戳注射进 trainer 的底层配置中，防止底层强制从 0 开始刷数据覆盖同名 x 轴
-    agent_cfg["trainer"]["initial_timestep"] = start_timestep
+        agent_cfg["trainer"]["timesteps"] = additional_timesteps
+        print(f"[INFO] 🎯 Training target: {additional_timesteps} new timesteps this round (global offset: {start_timestep}).")
         
     agent_cfg["trainer"]["close_environment_at_exit"] = False
     # configure the ML framework into the global skrl variable
@@ -376,17 +372,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if resume_path:
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
         runner.agent.load(resume_path)
-        # Force the timestep internally just in case SKRL doesn't do it properly
-        if 'start_timestep' in locals() and start_timestep > 0:
-            runner.agent.initial_timestep = start_timestep
-            runner.agent.timestep = start_timestep
-            
-            # 同步更新 Trainer 的时间和进度轴起点
-            if hasattr(runner, "trainer") and runner.trainer is not None:
-                runner.trainer.initial_timestep = start_timestep
-                runner.trainer.timestep = start_timestep
-            else:
-                print("[WARNING] Could not find trainer to override initial_timestep")
+
+    if start_timestep > 0:
+        agent = runner.agent
+        _original_write_tracking = agent.write_tracking_data.__func__
+        _original_write_checkpoint = agent.write_checkpoint.__func__
+        _offset = start_timestep
+
+        import types
+
+        def _patched_write_tracking(self, *, timestep, timesteps):
+            _original_write_tracking(self, timestep=timestep + _offset, timesteps=timesteps + _offset)
+
+        def _patched_write_checkpoint(self, *, timestep, timesteps):
+            _original_write_checkpoint(self, timestep=timestep + _offset, timesteps=timesteps + _offset)
+
+        agent.write_tracking_data = types.MethodType(_patched_write_tracking, agent)
+        agent.write_checkpoint = types.MethodType(_patched_write_checkpoint, agent)
+        print(f"[INFO] ⏱️ Monkey-patched Agent with timestep offset = {_offset} for TensorBoard & checkpoint naming.")
 
     # run training
     runner.run()
