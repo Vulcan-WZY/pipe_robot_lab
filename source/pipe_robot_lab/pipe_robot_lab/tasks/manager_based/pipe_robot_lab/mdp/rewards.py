@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-10 18:52
+# LastEditTime: 2026-05-13 01:25
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -196,7 +196,7 @@ class RewardsCfg:
     survival_bonus = RewTerm(
         func=mdp.is_terminated_term,
         params={"term_keys": ["time_out"]},
-        weight=50.0,
+        weight=0.0,
     )
     
     # 最大里程奖励 (根据配置，取机器人前端 FM_24_link 前进数值最准确)
@@ -266,10 +266,9 @@ class RewardsCfg:
             "sigma": 0.4,
             "min_contact": 2,
         },
-        weight=2.0
+        weight=8.0
     )
 
-    # 后侧夹持臂角度匹配奖励 (基于 BM_01_link 位置查询管道直径)
     back_dia_matched = RewTerm(
         func=dia_matched_reward,
         params={
@@ -279,7 +278,7 @@ class RewardsCfg:
             "sigma": 0.4,
             "min_contact": 2,
         },
-        weight=2.0
+        weight=8.0
     )
 
     # -----------------------------
@@ -328,7 +327,7 @@ class RewardsCfg:
         params={
             "action_indices": list(range(0, 12)),
         },
-        weight=-5.0
+        weight=-0.5
     )
     
     # 弯折偏离惩罚: 夹持课程阶段冻结 bend 自由度
@@ -338,5 +337,5 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "joint_names": ["bend_01", "bend_02"],
         },
-        weight=-3.0
+        weight=-1.0
     )

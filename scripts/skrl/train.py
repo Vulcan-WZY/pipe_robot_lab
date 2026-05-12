@@ -42,6 +42,7 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument("--save_interval", type=int, default=None, help="Steps interval to save model checkpoints.")
 parser.add_argument("--experiment_dir", type=str, default=None, help="Override the experiment directory for logging.")
 parser.add_argument("--run_name", type=str, default=None, help="Override the run name (subfolder) to prevent timestamp folder creation.")
+parser.add_argument("--timestep_offset", type=int, default=None, help="Global timestep offset for TensorBoard and checkpoint naming (set by auto_train_loop).")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--ml_framework",
@@ -227,7 +228,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Get checkpoint path early to extract accumulated timestep
     resume_path_early = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
     start_timestep = 0
-    if resume_path_early:
+    if args_cli.timestep_offset is not None:
+        start_timestep = args_cli.timestep_offset
+        print(f"[INFO] ⏱️ Using externally provided timestep offset: {start_timestep}")
+    elif resume_path_early:
         import re
         match = re.search(r"(\d+)\.pt", resume_path_early)
         if match:

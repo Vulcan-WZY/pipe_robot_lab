@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-30 11:02
 # Author: Vulcan
-# LastEditTime: 2026-05-06 13:09
+# LastEditTime: 2026-05-13 01:26
 # Description: 配置训练环境的终止检测函数
 # ==========
 import torch
@@ -150,7 +150,7 @@ class TerminationsCfg:
         params={
             "sensor_names": ["touch_m1", "touch_m2", "touch_a1", "touch_a2", "touch_a3", "touch_a4"],
             "threshold": 0.05,
-            "min_steps": 50,
+            "min_steps": 80,
             "enabled": True,
         }
     )

@@ -189,3 +189,24 @@ $$
 | `./sh/start_curriculum.sh stop`   | 终止训练和TensorBoard         |
 
 **关键操作**: 在 attach 进入 tmux 会话后，按 `Ctrl+B` 再按 `D` 可安全脱离会话（训练继续运行）。
+
+### 0513
+
+#### 重构多轮训练的全局 timestep 管理
+
+**问题**: 之前的方案依赖从 checkpoint 文件名中正则提取 step 编号作为全局偏移量。但 `cleanup_old_checkpoints` 按时间戳删除旧文件后，真正具有最大编号的 checkpoint 可能被误删，导致下一轮提取到的偏移量骤降，进而 checkpoint 文件名重复覆盖，TensorBoard 数据出现从原点到末端的直线和 step 重叠。
+
+**解决方案**: 将全局 timestep 的管理职责**从 `train.py` 上移至 `auto_train_loop.py`**。
+
+核心改动:
+
+1. **`auto_train_loop.py` 重写**:
+   - 启动时一次性扫描 log 目录，按文件名编号（而非时间戳）找到最大 step 作为全局起点
+   - 每轮结束后，外层精确计算 `global_timestep += steps_per_round`
+   - 通过新增的 `--timestep_offset` 命令行参数将偏移量传给 `train.py`
+   - checkpoint 清理改为**按文件名编号降序排列**保留最新 N 个，不再依赖时间戳
+   - 每轮结束后验证预期的 checkpoint 是否存在，不存在时 fallback 检测并自动修正 global_timestep
+
+2. **`train.py` 新增 `--timestep_offset` 参数**:
+   - 优先使用外部传入的偏移量，fallback 才从 checkpoint 文件名提取
+   - 确保 monkey-patch 的偏移量始终由外层权威计算，不受 checkpoint 清理影响
