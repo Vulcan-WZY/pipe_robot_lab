@@ -210,3 +210,85 @@ $$
 2. **`train.py` 新增 `--timestep_offset` 参数**:
    - 优先使用外部传入的偏移量，fallback 才从 checkpoint 文件名提取
    - 确保 monkey-patch 的偏移量始终由外层权威计算，不受 checkpoint 清理影响
+
+#### 新增 Play 推理演示脚本
+
+新增文件:
+- `sh/config/play.yaml` — 推理配置 (checkpoint路径、渲染模式、视频录制参数)
+- `sh/play_runner.py` — 读取 yaml、搜索 checkpoint、组装命令行参数
+- `sh/play.sh` — Shell 启动入口
+
+使用方式:
+
+| 命令 | 作用 |
+|------|------|
+| `./sh/play.sh` | 使用 play.yaml 默认配置运行推理 (GUI + 实时步频) |
+| `./sh/play.sh --headless --video` | 无头模式录制视频 |
+| `./sh/play.sh --num_envs 4` | 额外 CLI 参数直接透传给 play.py |
+
+配置文件 `sh/config/play.yaml` 中可设置 checkpoint 名称 (支持 `best_agent.pt` / 绝对路径 / `agent_xxxxx.pt`)、渲染模式、视频保存路径等。
+
+#### [严重BUG修复] CNN 视觉分支从未接收到真实深度图
+
+**问题**: `custom_skrl_model.py` 的 `compute` 方法中第一行为 `obs_dict = inputs["states"]`。但在 SKRL 新版本的 `PPO.act()` 实现中，环境观测数据被放在 `inputs["observations"]` 键中，而 `inputs["states"]` 对应的是 `env.state()` 的返回值（在我们的环境中始终为 `None`）。
+
+**后果**: 自项目开始以来的所有训练中，CNN 视觉分支的输入**始终为全零张量**（走 fallback 路径），导致：
+- 深度图信息从未参与策略决策
+- CNN 权重从未被有效梯度更新
+- 策略实质上退化为一个输入全零的 MLP，无法利用视觉信息
+
+**修复**: 将 `inputs["states"]` 改为 `inputs.get("observations", inputs.get("states", None))`，优先读取 `"observations"` 键（正常训练/推理路径），fallback 到 `"states"` 键（兼容 `init_state_dict` 阶段的探测调用）。
+
+**影响**: 此修复前产生的所有 checkpoint 权重均无效，需从头重新训练。
+
+#### 网络健康监控系统 (Network Diagnostics)
+
+为防止多模态网络中某个子模块"静默失效"（如 CNN 输入全零、梯度为零等），新增可开关的诊断系统。
+
+**开关位置**: `sh/config/auto_train.yaml` → `debug` 段
+
+```yaml
+debug:
+    enabled: true             # 总开关
+    log_interval: 50          # 每 50 次 PPO 更新记录一次
+    log_images: true          # 将深度图写入 TensorBoard Images tab
+    log_grad_norm: true       # 记录 CNN/MLP/Fusion 各模块梯度范数
+    log_activation_stats: true # 记录激活值均值与标准差
+    assert_nonzero_input: true # 断言输入非全零
+```
+
+**TensorBoard 中新增的指标** (Diagnostics/ 前缀):
+
+| 指标名 | 含义 | 异常判断 |
+|--------|------|----------|
+| `grad_norm_cnn` | CNN+vision_proj 梯度 L2 范数 | 持续为 0 → 视觉分支未训练 |
+| `grad_norm_prop_mlp` | 本体 MLP 梯度范数 | 远大于 CNN → 视觉信号无效 |
+| `grad_norm_fusion` | 融合层+输出层梯度范数 | 为 0 → 整体反向传播中断 |
+| `activation_mean/std_vision` | CNN 输出特征统计 | mean恒为0 → 输入或前向有问题 |
+| `activation_mean/std_prop` | 本体 MLP 输出特征统计 | 同上 |
+| `input_mean_depth` | 深度图输入均值 | 恒为 0 → 相机数据未送入 |
+| `input_nonzero_ratio` | 深度图非零像素占比 | 恒为 0 → 同上 |
+| `depth_input_ch0_front` | 前置深度图可视化 (Images tab) | 全黑 → 相机失效 |
+| `depth_input_ch1_back` | 后置深度图可视化 (Images tab) | 全黑 → 同上 |
+
+**性能影响**: 诊断模块仅在 `debug.enabled=true` 时激活，每次前向传播额外开销为 4 次 `.detach()` 调用（约 0.01ms），TensorBoard 写入仅在 log_interval 间隔触发。关闭 debug 后零开销。
+
+#### 相机 clipping_range 调优
+
+将前后深度相机的 `clipping_range` 从 `(0.1, 10.0)` 改为 `(0.01, 3.0)`。原因：机器人在管道外表面夹持，相机到管壁的有效距离约 0.05~1.5m，10m 量程导致归一化后有效信息仅占值域 5%~15%，CNN 需要额外学会放大这个极小的差异。缩小量程后深度图信息密度提升约 7 倍。
+
+#### 深度图 TensorBoard 可视化修复
+
+诊断模块写入 Images tab 时显示全黑，原因是归一化后深度值集中在 0.05~0.15（对应灰度极暗）。修复为写入前对每帧做独立的 **min-max 拉伸到 [0,1]**，确保管道轮廓清晰可见。
+
+#### PPO 超参数调优（正式训练前）
+
+| 参数 | 调整前 | 调整后 | 理由 |
+|------|--------|--------|------|
+| `learning_epochs` | 5 | 8 | CNN 特征需要更多 epoch 从稀疏梯度中提取 |
+| `mini_batches` | 4 | 8 | 更小 batch size 让 CNN 获得更频繁的梯度更新 |
+| `kl_threshold` | 0.008 | 0.012 | CNN+MLP 的 KL 波动天然更大，过紧会频繁压低 lr |
+| `value_clip` | 0.3 | 0.2 | 收紧 Critic 更新幅度，增强稳定性 |
+| `time_limit_bootstrap` | False | True | 超时截断时 bootstrap 可减少对长生存策略的负偏估 |
+
+这些改动零额外时间开销，但提升了样本利用效率。

@@ -331,5 +331,5 @@ class ObservationsCfg:
     camera: CameraCfg = CameraCfg()
     policy = PolicyCfg()
     critic = CriticCfg()
-    debug: DebugCfg = DebugCfg()
+    # debug: DebugCfg = DebugCfg()
     

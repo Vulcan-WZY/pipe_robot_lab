@@ -43,6 +43,8 @@ parser.add_argument("--save_interval", type=int, default=None, help="Steps inter
 parser.add_argument("--experiment_dir", type=str, default=None, help="Override the experiment directory for logging.")
 parser.add_argument("--run_name", type=str, default=None, help="Override the run name (subfolder) to prevent timestamp folder creation.")
 parser.add_argument("--timestep_offset", type=int, default=None, help="Global timestep offset for TensorBoard and checkpoint naming (set by auto_train_loop).")
+parser.add_argument("--debug", action="store_true", default=False, help="Enable network diagnostics (grad norm, activation stats, input images to TensorBoard).")
+parser.add_argument("--debug_log_interval", type=int, default=50, help="How often (in PPO updates) to log diagnostic data.")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--ml_framework",
@@ -210,6 +212,11 @@ else:
 @hydra_task_config(args_cli.task, agent_cfg_entry_point)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
     """Train with skrl agent."""
+    # Set debug environment variables for model diagnostics
+    if args_cli.debug:
+        os.environ["PIPE_ROBOT_DEBUG"] = "1"
+        os.environ["PIPE_ROBOT_DEBUG_INTERVAL"] = str(args_cli.debug_log_interval)
+    
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
@@ -377,16 +384,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
         runner.agent.load(resume_path)
 
-    if start_timestep > 0:
+    if start_timestep > 0 or args_cli.debug:
         agent = runner.agent
         _original_write_tracking = agent.write_tracking_data.__func__
         _original_write_checkpoint = agent.write_checkpoint.__func__
         _offset = start_timestep
 
         import types
+        
+        if args_cli.debug:
+            from pipe_robot_lab.tasks.manager_based.pipe_robot_lab.agents.models.custom_skrl_model import get_diagnostics
+            _diag = get_diagnostics()
+            diag_log_dir = os.path.join(log_dir, "continuous_run")
+            _diag.set_log_dir(diag_log_dir)
+            print(f"[INFO] 🔬 Diagnostics writer initialized at: {diag_log_dir}")
 
         def _patched_write_tracking(self, *, timestep, timesteps):
-            _original_write_tracking(self, timestep=timestep + _offset, timesteps=timesteps + _offset)
+            global_ts = timestep + _offset
+            _original_write_tracking(self, timestep=global_ts, timesteps=timesteps + _offset)
+            if args_cli.debug and _diag.should_log():
+                _diag.log_to_writer(runner.agent.policy, global_ts)
 
         def _patched_write_checkpoint(self, *, timestep, timesteps):
             _original_write_checkpoint(self, timestep=timestep + _offset, timesteps=timesteps + _offset)
@@ -394,6 +411,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent.write_tracking_data = types.MethodType(_patched_write_tracking, agent)
         agent.write_checkpoint = types.MethodType(_patched_write_checkpoint, agent)
         print(f"[INFO] ⏱️ Monkey-patched Agent with timestep offset = {_offset} for TensorBoard & checkpoint naming.")
+        if args_cli.debug:
+            print(f"[INFO] 🔬 Network diagnostics enabled (interval={args_cli.debug_log_interval}).")
 
     # run training
     runner.run()

@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-05-05 14:23
 # Author: Vulcan
-# LastEditTime: 2026-05-13 01:24
+# LastEditTime: 2026-05-13 23:53
 # Description: 
 # ==========
 import os
@@ -88,6 +88,7 @@ def main():
     train_cfg = cfg.get("training", {})
     isl_cfg = cfg.get("isaaclab", {})
     ckpt_cfg = cfg.get("checkpointing", {})
+    debug_cfg = cfg.get("debug", {})
 
     framework = train_cfg.get("framework", "skrl")
     script_path = os.path.join("scripts", framework, "train.py")
@@ -134,6 +135,10 @@ def main():
             cmd.append("--video")
             if "video_interval" in isl_cfg:
                 cmd.extend(["--video_interval", str(isl_cfg["video_interval"])])
+
+        if debug_cfg.get("enabled", False):
+            cmd.append("--debug")
+            cmd.extend(["--debug_log_interval", str(debug_cfg.get("log_interval", 50))])
 
         if resume_ckpt and ckpt_cfg.get("resume_from_latest", True):
             cmd.extend(["--checkpoint", resume_ckpt])

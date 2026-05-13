@@ -149,6 +149,9 @@ class VisionIsaacLabWrapper(Wrapper):
     def state_space(self):
         return None
 
+    def state(self):
+        return None
+
     @property
     def observation_space(self):
         return self._observation_space
@@ -253,13 +256,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
 
     # wrap for video recording
     if args_cli.video:
+        video_save_dir = os.environ.get("PLAY_VIDEO_SAVE_DIR", os.path.join(log_dir, "videos", "play"))
+        os.makedirs(video_save_dir, exist_ok=True)
         video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
+            "video_folder": video_save_dir,
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
         }
-        print("[INFO] Recording videos during training.")
+        print(f"[INFO] Recording video to: {video_save_dir}")
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
@@ -306,7 +311,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
     runner.agent.load(resume_path)
     # set agent to evaluation mode
-    runner.agent.set_running_mode("eval")
+    runner.agent.enable_training_mode(False)
 
     # reset environment
     obs, _ = env.reset()
@@ -317,7 +322,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
 
         # 仅策略前向使用 inference_mode，环境 step/reset 必须在普通上下文运行
         with torch.inference_mode():
-            outputs = runner.agent.act(obs, timestep=0, timesteps=0)
+            outputs = runner.agent.act(obs, None, timestep=0, timesteps=0)
             # - multi-agent (deterministic) actions
             if hasattr(env, "possible_agents"):
                 actions = {a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.possible_agents}

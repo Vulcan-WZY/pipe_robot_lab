@@ -1,7 +1,107 @@
+import os
 import torch
 import torch.nn as nn
 from skrl.models.torch import GaussianMixin, DeterministicMixin, Model
 from skrl.utils.spaces.torch import compute_space_size
+
+
+class NetworkDiagnostics:
+    """网络健康监控器: 记录梯度范数、激活值统计、输入数据到 TensorBoard."""
+    
+    def __init__(self, enabled=False, log_interval=50):
+        self.enabled = enabled
+        self.log_interval = log_interval
+        self._call_count = 0
+        self._writer = None
+        self._last_vision_input = None
+        self._last_vision_features = None
+        self._last_prop_input = None
+        self._last_prop_features = None
+    
+    def set_log_dir(self, log_dir):
+        if self._writer is None and self.enabled:
+            from torch.utils.tensorboard import SummaryWriter as TBWriter
+            self._writer = TBWriter(log_dir=log_dir)
+    
+    def set_writer(self, writer):
+        pass
+    
+    def on_forward(self, img_input, vision_features, prop_input, prop_features, global_step=None):
+        if not self.enabled:
+            return
+        self._call_count += 1
+        self._last_vision_input = img_input.detach()
+        self._last_vision_features = vision_features.detach()
+        self._last_prop_input = prop_input.detach()
+        self._last_prop_features = prop_features.detach()
+    
+    def should_log(self):
+        return self.enabled and self._call_count % self.log_interval == 0
+    
+    def log_to_writer(self, model, global_step):
+        if not self.enabled or self._writer is None:
+            return
+        
+        if self._last_vision_features is not None:
+            self._writer.add_scalar("Diagnostics/activation_mean_vision", 
+                                    self._last_vision_features.mean().item(), global_step)
+            self._writer.add_scalar("Diagnostics/activation_std_vision", 
+                                    self._last_vision_features.std().item(), global_step)
+        
+        if self._last_prop_features is not None:
+            self._writer.add_scalar("Diagnostics/activation_mean_prop", 
+                                    self._last_prop_features.mean().item(), global_step)
+            self._writer.add_scalar("Diagnostics/activation_std_prop", 
+                                    self._last_prop_features.std().item(), global_step)
+        
+        if self._last_vision_input is not None:
+            self._writer.add_scalar("Diagnostics/input_mean_depth", 
+                                    self._last_vision_input.mean().item(), global_step)
+            self._writer.add_scalar("Diagnostics/input_nonzero_ratio", 
+                                    (self._last_vision_input.abs() > 1e-6).float().mean().item(), global_step)
+            img_to_log = self._last_vision_input[0:1].clone()
+            for ch in range(img_to_log.shape[1]):
+                ch_data = img_to_log[:, ch:ch+1, :, :]
+                ch_min = ch_data.min()
+                ch_max = ch_data.max()
+                if ch_max - ch_min > 1e-6:
+                    img_to_log[:, ch:ch+1, :, :] = (ch_data - ch_min) / (ch_max - ch_min)
+                else:
+                    img_to_log[:, ch:ch+1, :, :] = 0.0
+            self._writer.add_images("Diagnostics/depth_input_ch0_front", 
+                                    img_to_log[:, 0:1, :, :], global_step)
+            self._writer.add_images("Diagnostics/depth_input_ch1_back", 
+                                    img_to_log[:, 1:2, :, :], global_step)
+        
+        cnn_grad_norm = 0.0
+        prop_grad_norm = 0.0
+        fusion_grad_norm = 0.0
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.data.norm(2).item()
+                if "cnn" in name or "vision_proj" in name:
+                    cnn_grad_norm += grad_norm ** 2
+                elif "proprioception_mlp" in name:
+                    prop_grad_norm += grad_norm ** 2
+                elif "fusion_mlp" in name or "output_layer" in name:
+                    fusion_grad_norm += grad_norm ** 2
+        
+        self._writer.add_scalar("Diagnostics/grad_norm_cnn", cnn_grad_norm ** 0.5, global_step)
+        self._writer.add_scalar("Diagnostics/grad_norm_prop_mlp", prop_grad_norm ** 0.5, global_step)
+        self._writer.add_scalar("Diagnostics/grad_norm_fusion", fusion_grad_norm ** 0.5, global_step)
+        self._writer.flush()
+
+
+_GLOBAL_DIAGNOSTICS = None
+
+def get_diagnostics():
+    global _GLOBAL_DIAGNOSTICS
+    if _GLOBAL_DIAGNOSTICS is None:
+        _GLOBAL_DIAGNOSTICS = NetworkDiagnostics(
+            enabled=os.environ.get("PIPE_ROBOT_DEBUG", "0") == "1",
+            log_interval=int(os.environ.get("PIPE_ROBOT_DEBUG_INTERVAL", "50"))
+        )
+    return _GLOBAL_DIAGNOSTICS
 
 
 def _get_subspace(space, key):
@@ -146,7 +246,7 @@ class CustomActorCritic(Model):
             nn.init.orthogonal_(self.output_layer.weight, gain=0.01)
 
     def compute(self, inputs, role=""):
-        obs_dict = inputs["states"]
+        obs_dict = inputs.get("observations", inputs.get("states", None))
         if torch.is_tensor(obs_dict):
             from skrl.utils.spaces.torch import unflatten_tensorized_space
             obs_dict = unflatten_tensorized_space(self.observation_space, obs_dict)
@@ -183,6 +283,8 @@ class CustomActorCritic(Model):
             prop_input = torch.zeros(batch_size, self._prop_dim, device=device)
         
         prop_features = self.proprioception_mlp(prop_input)
+
+        get_diagnostics().on_forward(img_input, vision_features, prop_input, prop_features)
 
         fused_features = torch.cat([vision_features, prop_features], dim=-1)
         latent_features = self.fusion_mlp(fused_features)

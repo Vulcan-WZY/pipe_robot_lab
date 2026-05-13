@@ -159,7 +159,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             focal_length=1.93,
             horizontal_aperture=3.8,
             vertical_aperture=2.39,
-            clipping_range=(0.1, 10.0),
+            clipping_range=(0.01, 3.0),
         ),
     )
     front_cam = TiledCameraCfg(
@@ -174,7 +174,7 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             focal_length=1.93,
             horizontal_aperture=3.8,
             vertical_aperture=2.39,
-            clipping_range=(0.1, 10.0),
+            clipping_range=(0.01, 3.0),
         ),
     )
     # back_imu = ImuCfg(

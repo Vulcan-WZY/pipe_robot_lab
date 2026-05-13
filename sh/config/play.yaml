@@ -1,0 +1,20 @@
+# ===========
+# Date: 2026-05-13
+# Author: Vulcan
+# Description: play/推理演示的配置文件
+# ==========
+
+play:
+    task: "Template-Pipe-Robot-Lab-v1"
+    num_envs: 1
+    checkpoint: "best_agent.pt"       # 支持: "best_agent.pt" (自动在log_root_dir中搜索), 或绝对路径
+    log_root_dir: "logs/skrl/ppo_auto_04"
+
+rendering:
+    headless: false
+    real_time: true
+
+video:
+    enabled: false
+    length: 500                       # 录制步数
+    save_dir: "videos/play_results_04"   # 相对于工作空间根目录的保存路径

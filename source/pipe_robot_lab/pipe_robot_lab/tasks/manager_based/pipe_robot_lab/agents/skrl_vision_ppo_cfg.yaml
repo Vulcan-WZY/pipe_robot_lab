@@ -21,8 +21,8 @@ memory:
 agent:
     class: PPO
     rollouts: 32 # 每次策略更新前，先与环境交互收集多少步数据 (PPO 的 on-policy 批次长度)
-    learning_epochs: 5 # 每次更新时，对同一批 rollout 数据重复优化的轮数
-    mini_batches: 4 # 将 rollout 再切成多少小批次做梯度下降；越大单次更新越“碎”
+    learning_epochs: 8 # 每次更新时，对同一批 rollout 数据重复优化的轮数
+    mini_batches: 8 # 将 rollout 再切成多少小批次做梯度下降；越大单次更新越"碎"
     discount_factor: 0.99 # 折扣因子 gamma，越大越重视长期回报
     lambda: 0.95 # GAE 的 lambda；在偏差与方差之间折中，0.95 是常见稳健默认值
     # **由于加入了 CNN (多模态），学习率初期一定不能像以前纯 MLP 那么奔放！**
@@ -30,7 +30,7 @@ agent:
     learning_rate: 1.0e-4 # Adam 学习率；视觉输入 + 大网络时通常需要更小学习率
     learning_rate_scheduler: KLAdaptiveLR # 根据策略 KL 偏移自适应调节学习率
     learning_rate_scheduler_kwargs:
-        kl_threshold: 0.008 # 目标 KL 阈值，策略更新过猛时会自动降低学习率
+        kl_threshold: 0.012 # 目标 KL 阈值，策略更新过猛时会自动降低学习率
     
     # 因为我们现在输入是字典，SKRL的默认预处理器有时会吃瘪。暂设 null 
     state_preprocessor: null # 状态预处理器；dict 观测下先关闭，避免与自定义观测结构冲突
@@ -44,7 +44,7 @@ agent:
     learning_starts: 0 # 从第几步开始学习；PPO 通常立即学习
     grad_norm_clip: 1.0 # 梯度裁剪上限，防止梯度爆炸
     ratio_clip: 0.2 # PPO 核心裁剪系数 epsilon，限制新旧策略比值偏移
-    value_clip: 0.3 # Critic 目标裁剪幅度，抑制价值网络更新震荡
+    value_clip: 0.2 # Critic 目标裁剪幅度，抑制价值网络更新震荡
     clip_predicted_values: True # 是否对价值预测启用裁剪
     
     # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
@@ -52,7 +52,7 @@ agent:
     value_loss_scale: 1.0 # Critic 损失权重；与 policy loss 的相对平衡系数
     kl_threshold: 0.0 # PPO Agent 内部早停 KL 阈值；0.0 代表关闭该机制(由上面的调度器控制)
     rewards_shaper_scale: 1.0 # 奖励缩放系数；整体放大奖励或缩小奖励的快捷入口
-    time_limit_bootstrap: False # 回合因时间上限截断时是否 bootstrap 下一个状态价值
+    time_limit_bootstrap: True # 回合因时间上限截断时是否 bootstrap 下一个状态价值
     
     # logging and checkpoint
     experiment:
