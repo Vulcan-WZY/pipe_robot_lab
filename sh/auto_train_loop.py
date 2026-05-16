@@ -11,6 +11,49 @@ import yaml
 import glob
 import subprocess
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def validate_checkpoint_weights(pt_path):
+    """
+    加载 checkpoint 文件并扫描所有权重张量是否含 NaN/Inf。
+    返回 (is_clean: bool, error_msg: str)。
+    """
+    import torch
+    try:
+        checkpoint = torch.load(pt_path, weights_only=False, map_location="cpu")
+    except Exception as e:
+        return False, f"Failed to load checkpoint: {e}"
+
+    nan_keys = []
+    inf_keys = []
+
+    def _scan(prefix, obj):
+        if torch.is_tensor(obj):
+            if torch.isnan(obj).any():
+                nan_keys.append(prefix)
+            elif torch.isinf(obj).any():
+                inf_keys.append(prefix)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                _scan(f"{prefix}.{k}" if prefix else k, v)
+        elif isinstance(obj, (list, tuple)):
+            for i, v in enumerate(obj):
+                _scan(f"{prefix}[{i}]", v)
+
+    _scan("", checkpoint)
+
+    if nan_keys or inf_keys:
+        details = []
+        if nan_keys:
+            details.append(f"NaN in: {nan_keys[:5]}")
+        if inf_keys:
+            details.append(f"Inf in: {inf_keys[:5]}")
+        return False, "; ".join(details)
+
+    return True, "OK"
 
 
 def detect_global_timestep(root_dir):
@@ -113,6 +156,16 @@ def main():
     else:
         print(f"[INFO] 🌱 No checkpoint found. Starting fresh from timestep 0.")
 
+    # 安全 checkpoint 栈：用于当前轮 checkpoint 被 NaN 污染时回退
+    safe_checkpoints = []
+    if resume_ckpt and os.path.exists(resume_ckpt):
+        is_clean, msg = validate_checkpoint_weights(resume_ckpt)
+        if is_clean:
+            safe_checkpoints.append(resume_ckpt)
+            print(f"[INFO] ✅ Initial checkpoint validated: {os.path.basename(resume_ckpt)}")
+        else:
+            print(f"[ERROR] ❌ Initial checkpoint contains {msg}! Training may diverge immediately.")
+
     for round_idx in range(1, total_rounds + 1):
         print(f"\n{'='*60}")
         print(f"[INFO] 🚀 Round {round_idx} / {total_rounds} | Global offset: {global_timestep}")
@@ -139,6 +192,10 @@ def main():
         if debug_cfg.get("enabled", False):
             cmd.append("--debug")
             cmd.extend(["--debug_log_interval", str(debug_cfg.get("log_interval", 50))])
+        if debug_cfg.get("nan_trace", False):
+            cmd.append("--nan_trace")
+        if debug_cfg.get("anomaly_detect", False):
+            cmd.append("--anomaly_detect")
 
         if resume_ckpt and ckpt_cfg.get("resume_from_latest", True):
             cmd.extend(["--checkpoint", resume_ckpt])
@@ -166,15 +223,51 @@ def main():
         checkpoints_dir = os.path.join(log_root_dir, "continuous_run", "checkpoints")
         expected_ckpt_path = os.path.join(checkpoints_dir, expected_ckpt_name)
 
+        # === Layer 3: Checkpoint NaN 验证与自动回退 ===
         if os.path.exists(expected_ckpt_path):
-            resume_ckpt = expected_ckpt_path
+            is_clean, msg = validate_checkpoint_weights(expected_ckpt_path)
+            if is_clean:
+                resume_ckpt = expected_ckpt_path
+                safe_checkpoints.append(resume_ckpt)
+                # 只保留最近 5 个安全 checkpoint 引用
+                if len(safe_checkpoints) > 5:
+                    safe_checkpoints = safe_checkpoints[-5:]
+                print(f"[INFO] ✅ Checkpoint validated clean: {expected_ckpt_name}")
+            else:
+                print(f"[ERROR] ❌ Checkpoint CORRUPTED ({msg}): {expected_ckpt_name}")
+                os.remove(expected_ckpt_path)
+                print(f"[INFO] 🗑️ Deleted corrupted checkpoint: {expected_ckpt_name}")
+                # 回退到上一个安全 checkpoint
+                if safe_checkpoints:
+                    resume_ckpt = safe_checkpoints[-1]
+                    # 回退 global_timestep 以匹配回退的 checkpoint
+                    match = re.search(r"(\d+)\.pt$", resume_ckpt)
+                    if match:
+                        global_timestep = int(match.group(1))
+                    print(f"[INFO] ↩️ Fallback to safe checkpoint: {os.path.basename(resume_ckpt)} "
+                          f"(global_timestep reset to {global_timestep})")
+                else:
+                    print("[ERROR] ❌ No safe checkpoint to fall back to! Training cannot continue safely.")
+                    sys.exit(1)
         else:
-            _, resume_ckpt = detect_global_timestep(log_root_dir)
-            if resume_ckpt:
-                actual_step = int(re.search(r"(\d+)\.pt$", resume_ckpt).group(1))
-                if actual_step != expected_ckpt_step:
-                    print(f"[WARNING] Expected checkpoint step {expected_ckpt_step} but found {actual_step}. Using found checkpoint.")
+            # 预期 checkpoint 不存在时使用 fallback 探测
+            _, found_ckpt = detect_global_timestep(log_root_dir)
+            if found_ckpt:
+                actual_step = int(re.search(r"(\d+)\.pt$", found_ckpt).group(1))
+                print(f"[WARNING] Expected checkpoint step {expected_ckpt_step} not found, "
+                      f"using {os.path.basename(found_ckpt)} (step {actual_step}).")
+                is_clean, msg = validate_checkpoint_weights(found_ckpt)
+                if is_clean:
+                    resume_ckpt = found_ckpt
                     global_timestep = actual_step
+                    safe_checkpoints.append(resume_ckpt)
+                else:
+                    print(f"[ERROR] ❌ Fallback checkpoint also corrupted ({msg})!")
+                    if safe_checkpoints:
+                        resume_ckpt = safe_checkpoints[-1]
+                        print(f"[INFO] ↩️ Falling back to last known safe checkpoint: {os.path.basename(resume_ckpt)}")
+                    else:
+                        sys.exit(1)
 
         cleanup_checkpoints_by_name(log_root_dir, keep_max_pt)
 

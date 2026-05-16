@@ -245,6 +245,49 @@ class CustomActorCritic(Model):
         if not self.is_critic:
             nn.init.orthogonal_(self.output_layer.weight, gain=0.01)
 
+    @staticmethod
+    def _sanitize_prop_input(t):
+        """检测本体观测中的 NaN/Inf 并替换为 0，返回 (安全张量, 是否含NaN, 是否含Inf)。"""
+        has_nan = torch.isnan(t).any()
+        has_inf = torch.isinf(t).any()
+        if has_nan or has_inf:
+            t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+        return t, has_nan, has_inf
+
+    def _maybe_save_action_nan_trace(self, actions, has_nan, has_inf):
+        """首次检测到动作 NaN 时保存完整张量及中间特征快照。"""
+        if not hasattr(self, "_act_trace_saved"):
+            self._act_trace_saved = False
+        if self._act_trace_saved:
+            return
+        self._act_trace_saved = True
+
+        import os as _os
+        import time as _time
+        trace_dir = _os.environ.get("PIPE_ROBOT_NAN_TRACE_DIR", "")
+        if not trace_dir:
+            return
+
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        fpath = _os.path.join(trace_dir, f"act_nan_{ts}.pt")
+        try:
+            snapshot = {
+                "actions": actions.detach().cpu(),
+                "action_shape": tuple(actions.shape),
+                "has_nan": bool(has_nan),
+                "has_inf": bool(has_inf),
+                "nan_count": int(torch.isnan(actions).sum().item()),
+                "nan_dims": torch.isnan(actions).nonzero(as_tuple=False)[:30].cpu().tolist(),
+                "log_std": self.log_std_parameter.detach().cpu(),
+            }
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.info(f"[NAN-TRACE] Saved action snapshot to {fpath} "
+                         f"(NaN count: {snapshot['nan_count']})")
+            torch.save(snapshot, fpath)
+        except Exception:
+            pass
+
     def compute(self, inputs, role=""):
         obs_dict = inputs.get("observations", inputs.get("states", None))
         if torch.is_tensor(obs_dict):
@@ -270,7 +313,7 @@ class CustomActorCritic(Model):
             img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
             img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
             img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
-        
+
         img_input = torch.cat([img_front, img_back], dim=1)
         vision_features = self.vision_proj(self.cnn(img_input))
 
@@ -281,7 +324,10 @@ class CustomActorCritic(Model):
         else:
             device = self.output_layer.weight.device
             prop_input = torch.zeros(batch_size, self._prop_dim, device=device)
-        
+
+        # NaN/Inf 检测：本体观测被污染时（如仿真矩阵退化）替换为安全值
+        prop_input, prop_has_nan, prop_has_inf = self._sanitize_prop_input(prop_input)
+
         prop_features = self.proprioception_mlp(prop_input)
 
         get_diagnostics().on_forward(img_input, vision_features, prop_input, prop_features)
@@ -290,9 +336,34 @@ class CustomActorCritic(Model):
         latent_features = self.fusion_mlp(fused_features)
 
         if not self.is_critic:
-            return self.output_layer(latent_features), {"log_std": self.log_std_parameter}
+            actions = self.output_layer(latent_features)
+            # 动作 NaN/Inf 检测：输出异常时归零，防止污染仿真加剧退化
+            act_has_nan = torch.isnan(actions).any()
+            act_has_inf = torch.isinf(actions).any()
+            if act_has_nan or act_has_inf:
+                if not hasattr(self, "_action_nan_count"):
+                    self._action_nan_count = 0
+                    import logging
+                    self._action_logger = logging.getLogger(__name__)
+                if self._action_nan_count < 10:
+                    nan_idxs = torch.isnan(actions).nonzero(as_tuple=False)
+                    idx_str = ", ".join(str(idx.tolist()) for idx in nan_idxs[:20])
+                    if nan_idxs.shape[0] > 20:
+                        idx_str += f", ... ({nan_idxs.shape[0]} total)"
+                    self._action_logger.warning(
+                        f"[ACT-NaN] NaN/Inf detected in Actor output (dims: [{idx_str}]), "
+                        f"replaced with 0. (warning {self._action_nan_count + 1}/10)"
+                    )
+                    self._action_nan_count += 1
+                # NaN trace 快照保存
+                self._maybe_save_action_nan_trace(actions, act_has_nan, act_has_inf)
+                actions = torch.nan_to_num(actions, nan=0.0, posinf=0.0, neginf=0.0)
+            return actions, {"log_std": self.log_std_parameter}
         else:
-            return self.output_layer(latent_features), {}
+            value = self.output_layer(latent_features)
+            if torch.isnan(value).any() or torch.isinf(value).any():
+                value = torch.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+            return value, {}
 
 class CustomActor(GaussianMixin, CustomActorCritic):
     def __init__(self, observation_space, action_space, device, **kwargs):

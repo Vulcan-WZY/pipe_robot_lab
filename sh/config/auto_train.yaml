@@ -1,24 +1,24 @@
 # ===========
 # Date: 2026-05-05 14:23
 # Author: Vulcan
-# LastEditTime: 2026-05-13 23:52
+# LastEditTime: 2026-05-17 00:15
 # Description: PPO训练的自动化配置文件，定义了训练框架、任务、环境数量、迭代次数等关键参数，以及Isaac Lab的渲染设置和Checkpoint的存储路径与续训选项。
 # ==========
 training:
     framework: "skrl"
     task: "Template-Pipe-Robot-Lab-v1"
-    num_envs: 48
+    num_envs: 96
     max_iterations_per_round: 300
     total_rounds: 150
     env_pipe_id_range:  [91, 170]
 
 isaaclab:
-    headless: true
-    video: false
-    video_interval: 2000
+    headless: true                     # 是否启用无头模式（即不显示图形界面），适合服务器训练
+    video: false                        # 是否录制训练过程的视频    
+    video_interval: 2000                # 
 
 checkpointing:
-    log_root_dir: "logs/skrl/ppo_auto_07"  # Tensorboard 日志与 Checkpoint 存放的根目录
+    log_root_dir: "logs/skrl/ppo_auto_08"  # Tensorboard 日志与 Checkpoint 存放的根目录
     resume_from_latest: true              # 若开启，自动扫描 `log_root_dir` 下最新修改的 `.pt` 权重文件进行断点续训接力
     saves_per_round: 2                    # 每小轮训练保存模型的次数 (例如配为2, 则在小轮中间和结束各保存一次)
     keep_max_pt_files: 4                  # 硬盘清理：将所有训练合并为单一连续任务后，文件夹内仅保留最新的前 5 个 `.pt` 权重文件，其余旧权重自动删除以节约开销(不会删除best_agent)
@@ -30,3 +30,8 @@ debug:
     log_grad_norm: true                   # 是否记录各子模块的梯度范数
     log_activation_stats: true            # 是否记录各子模块输出的激活值统计 (mean/std)
     assert_nonzero_input: true            # 是否在前向传播中断言输入非全零 (仅前100步生效)
+    
+    nan_trace: true                       # NaN 溯源：首次检测到 NaN 时保存完整张量快照到 .pt 文件，并打印具体 NaN 维度索引
+    anomaly_detect: false                 # PyTorch autograd 异常检测：定位反向传播中产生 NaN 的精确操作 (开启后训练变慢 ~15%)
+    
+    background: true                      # 是否通过 tmux 后台运行训练 (false 时直接在终端前台运行，方便调试)

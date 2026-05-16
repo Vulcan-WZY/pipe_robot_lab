@@ -45,6 +45,8 @@ parser.add_argument("--run_name", type=str, default=None, help="Override the run
 parser.add_argument("--timestep_offset", type=int, default=None, help="Global timestep offset for TensorBoard and checkpoint naming (set by auto_train_loop).")
 parser.add_argument("--debug", action="store_true", default=False, help="Enable network diagnostics (grad norm, activation stats, input images to TensorBoard).")
 parser.add_argument("--debug_log_interval", type=int, default=50, help="How often (in PPO updates) to log diagnostic data.")
+parser.add_argument("--nan_trace", action="store_true", default=False, help="On first NaN detection, save full tensor snapshot to .pt file and print NaN dimension indices.")
+parser.add_argument("--anomaly_detect", action="store_true", default=False, help="Enable torch.autograd anomaly detection to pinpoint NaN-producing ops (slower).")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--ml_framework",
@@ -85,6 +87,7 @@ import logging
 import os
 import random
 import time
+import torch
 from datetime import datetime
 from packaging import version
 from collections import OrderedDict
@@ -130,13 +133,20 @@ import pipe_robot_lab.tasks  # noqa: F401
 
 
 class VisionIsaacLabWrapper(Wrapper):
-    """SKRL wrapper that keeps multimodal observations (camera/policy/critic)."""
+    """SKRL wrapper that keeps multimodal observations (camera/policy/critic).
+
+    Includes NaN/Inf detection on observations to prevent simulation instability
+    from corrupting the training pipeline.
+    """
 
     def __init__(self, env):
         super().__init__(env)
         self._reset_once = True
         self._observations = None
         self._info = {}
+        self._nan_warn_count = 0
+        self._inf_warn_count = 0
+        self._max_warnings = 20  # 避免日志刷屏
 
         try:
             base_space = self._unwrapped.single_observation_space
@@ -179,10 +189,88 @@ class VisionIsaacLabWrapper(Wrapper):
             return {k: observations[k] for k in self._obs_keys if k in observations}
         return observations
 
+    @staticmethod
+    def _sanitize_tensor(t, label=""):
+        """将张量中的 NaN/Inf 替换为 0，返回是否进行了替换以及安全后的张量。"""
+        has_nan = torch.isnan(t).any()
+        has_inf = torch.isinf(t).any()
+        if has_nan or has_inf:
+            t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+        return t, has_nan.item() if isinstance(has_nan, torch.Tensor) else has_nan, has_inf.item() if isinstance(has_inf, torch.Tensor) else has_inf
+
+    def _sanitize_obs_dict(self, obs_dict):
+        """遍历观测字典，检测并清理所有子张量中的 NaN/Inf。
+        当 nan_trace 启用时，首次检测到 NaN 会保存完整快照到磁盘。
+        """
+        if not isinstance(obs_dict, dict):
+            return obs_dict
+
+        for key, val in obs_dict.items():
+            if torch.is_tensor(val):
+                has_nan = torch.isnan(val).any()
+                has_inf = torch.isinf(val).any()
+                if has_nan or has_inf:
+                    # 保存快照 (在清理前)
+                    self._maybe_save_nan_trace(key, val, has_nan, has_inf)
+                    val = torch.nan_to_num(val, nan=0.0, posinf=0.0, neginf=0.0)
+                    obs_dict[key] = val
+                if has_nan:
+                    if self._nan_warn_count < self._max_warnings:
+                        nan_idxs = torch.isnan(val).nonzero(as_tuple=False)
+                        # 打印前 20 个 NaN 维度索引，便于定位具体传感器/关节
+                        idx_str = ", ".join(str(idx.tolist()) for idx in nan_idxs[:20])
+                        if nan_idxs.shape[0] > 20:
+                            idx_str += f", ... ({nan_idxs.shape[0]} total)"
+                        logger.warning(f"[OBS-NaN] NaN detected in observation key '{key}', "
+                                       f"NaN dims: [{idx_str}], replaced with 0. "
+                                       f"(warning {self._nan_warn_count + 1}/{self._max_warnings})")
+                        self._nan_warn_count += 1
+                if has_inf:
+                    if self._inf_warn_count < self._max_warnings:
+                        logger.warning(f"[OBS-Inf] Inf detected in observation key '{key}', replaced with 0. "
+                                       f"(warning {self._inf_warn_count + 1}/{self._max_warnings})")
+                        self._inf_warn_count += 1
+            elif isinstance(val, dict):
+                self._sanitize_obs_dict(val)
+        return obs_dict
+
+    def _maybe_save_nan_trace(self, key, tensor, has_nan, has_inf):
+        """首次检测到 NaN/Inf 时保存完整张量快照到磁盘。"""
+        if not hasattr(self, "_nan_trace_saved"):
+            self._nan_trace_saved = set()
+        if key in self._nan_trace_saved:
+            return
+        self._nan_trace_saved.add(key)
+
+        trace_dir = os.environ.get("PIPE_ROBOT_NAN_TRACE_DIR", "")
+        if not trace_dir:
+            return
+
+        import time as _time
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        fname = f"obs_nan_{key}_{ts}.pt"
+        fpath = os.path.join(trace_dir, fname)
+        try:
+            torch.save({
+                "key": key,
+                "tensor": tensor.detach().cpu(),
+                "shape": tuple(tensor.shape),
+                "has_nan": bool(has_nan),
+                "has_inf": bool(has_inf),
+                "nan_count": int(torch.isnan(tensor).sum().item()),
+                "inf_count": int(torch.isinf(tensor).sum().item()),
+                "nan_dims": torch.isnan(tensor).nonzero(as_tuple=False)[:50].cpu().tolist(),
+            }, fpath)
+            logger.info(f"[NAN-TRACE] Saved observation snapshot to {fpath} "
+                        f"(NaN count: {torch.isnan(tensor).sum().item()})")
+        except Exception:
+            pass
+
     def step(self, actions):
         actions = unflatten_tensorized_space(self.action_space, actions)
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
         obs_selected = self._extract_observations(observations)
+        obs_selected = self._sanitize_obs_dict(obs_selected)
         self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
         return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
@@ -190,6 +278,7 @@ class VisionIsaacLabWrapper(Wrapper):
         if self._reset_once:
             observations, self._info = self._env.reset()
             obs_selected = self._extract_observations(observations)
+            obs_selected = self._sanitize_obs_dict(obs_selected)
             self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, obs_selected))
             self._reset_once = False
         return self._observations, self._info
@@ -216,6 +305,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.debug:
         os.environ["PIPE_ROBOT_DEBUG"] = "1"
         os.environ["PIPE_ROBOT_DEBUG_INTERVAL"] = str(args_cli.debug_log_interval)
+    if args_cli.nan_trace:
+        os.environ["PIPE_ROBOT_NAN_TRACE"] = "1"
+    if args_cli.anomaly_detect:
+        torch.autograd.set_detect_anomaly(True)
+        print("[INFO] 🔍 PyTorch autograd anomaly detection enabled (expect ~15% slowdown).")
     
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -315,6 +409,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
+
+    # 为 NaN trace 快照设置保存目录
+    if args_cli.nan_trace:
+        trace_dir = os.path.join(log_dir, "nan_traces")
+        os.makedirs(trace_dir, exist_ok=True)
+        os.environ["PIPE_ROBOT_NAN_TRACE_DIR"] = trace_dir
+        print(f"[INFO] 🔍 NaN trace snapshots will be saved to: {trace_dir}")
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

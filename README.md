@@ -292,3 +292,100 @@ debug:
 | `time_limit_bootstrap` | False | True | 超时截断时 bootstrap 可减少对长生存策略的负偏估 |
 
 这些改动零额外时间开销，但提升了样本利用效率。
+
+### 0516
+
+#### 三层 NaN/Inf 防御体系（阻断仿真异常→训练的传染链）
+
+**问题**: 训练过程中偶发 USD 底层 `Orthonormalize did not converge` 警告（仿真矩阵退化），一旦出现就会导致后续所有训练轮次失效。根因分析确认传染链条为：
+
+```
+仿真矩阵退化 → 观测值出现 NaN/Inf → PPO 用垃圾数据更新 → 网络权重被污染
+→ checkpoint 保存污染权重 → 下一轮加载污染权重 → 恶性循环
+```
+
+**核心漏洞**: 全链路（观测→前向→输出→checkpoint）无任何 NaN/Inf 检测与阻断机制。
+
+**解决方案**: 三层纵深防御，在污染链条的每个关键节点设置阻断点。
+
+**L1 — 观测层阻断** (`scripts/skrl/train.py` — `VisionIsaacLabWrapper`):
+
+- 在 `step()` 和 `reset()` 返回观测前，遍历所有观测子张量检测 NaN/Inf
+- 检测到异常时用 `torch.nan_to_num` 替换为安全值（0），并记录 warning 日志
+- 日志有上限控制（最多 20 条），防止刷屏
+- 覆盖本体观测 (policy)、视觉观测 (camera)、Critic 特权观测全部子空间
+
+**L2 — 网络层阻断** (`custom_skrl_model.py` — `CustomActorCritic.compute()`):
+
+- 本体观测 (prop_input) 进入 MLP 前检测 NaN/Inf 并替换
+- Actor 输出动作后检测 NaN/Inf，检测到时归零并记录 warning（上限 10 条）
+- Critic 输出价值后同样检测，防止异常价值估计污染 GAE 计算
+
+**L3 — Checkpoint 层阻断** (`sh/auto_train_loop.py`):
+
+- 新增 `validate_checkpoint_weights()` 函数：加载 .pt 文件递归扫描所有权重张量
+- 每轮训练结束后，验证最新 checkpoint 是否含 NaN/Inf
+- 检测到污染 checkpoint 时：自动删除损坏文件，回退到上一个已验证安全的 checkpoint
+- 维护安全 checkpoint 栈（最多 5 层），支持多级回退
+- 初始 checkpoint 也经过验证，启动即发现残留污染
+- 所有安全 checkpoint 都损坏时，fatal error 退出避免静默扩散
+
+**关键设计考量**:
+- L1 + L2 解决**本轮训练被污染**的问题（实时阻断）
+- L3 解决**即使本轮污染了，也不影响下一轮**的问题（事后隔离）
+- 三层互相独立，任一层失效不影响其他层的保护能力
+- 日志上限控制避免正常训练时日志爆炸
+- checkpoint 验证使用 CPU 加载，不影响 GPU 显存
+
+#### 训练脚本前台/后台模式切换
+
+**需求**: debug 模式下需要直接在终端观察训练启动输出，而非通过 tmux attach 间接查看。
+
+**方案**: 在 `sh/config/auto_train.yaml` → `debug` 段新增 `background` 开关，`start_curriculum.sh` 启动时读取该值决定运行模式。
+
+**使用方式**:
+
+| `background` 值 | 行为 | 适用场景 |
+|:---:|---|---|
+| `true` (默认) | tmux 后台运行，断联不中断 | 长期正式训练 |
+| `false` | 终端前台直接运行，Ctrl+C 中断 | 调试验证改动 |
+
+切换到前台模式时，`start_curriculum.sh attach` 和 `stop` 命令会自动适配（attach 提示无需连接，stop 只停 TensorBoard）。
+
+**涉及文件**:
+- `sh/config/auto_train.yaml` — 新增 `debug.background` 字段
+- `sh/start_curriculum.sh` — 读取 yaml 配置，分支执行前台/后台逻辑
+
+#### NaN 溯源调试工具 (nan_trace)
+
+**需求**: 三层 NaN 防御能阻断污染传播，但无法回答"NaN 最初是从哪个传感器/关节/操作产生的"。需要事后可分析的完整证据。
+
+**方案**: 在 `debug` 段新增两个开关：
+
+| 配置项 | 默认值 | 作用 |
+|--------|:---:|------|
+| `nan_trace` | `true` | 首次检测到 NaN 时保存完整张量快照到 `<log_dir>/nan_traces/` 目录 |
+| `anomaly_detect` | `false` | 启用 PyTorch `autograd.set_detect_anomaly(True)`，定位反向传播中产生 NaN 的具体操作 |
+
+**nan_trace 快照包含**:
+
+- **观测快照** (`obs_nan_<key>_<timestamp>.pt`): 原始张量 (清洗前)、NaN/Inf 数量、前 50 个 NaN 维度索引
+- **动作快照** (`act_nan_<timestamp>.pt`): 原始动作张量 (归零前)、NaN 维度索引、当前 log_std 值
+
+**增强日志**: 检测到 NaN 时日志会同时打印前 20 个具体的 NaN 维度索引，例如:
+```
+[OBS-NaN] NaN detected in observation key 'policy',
+  NaN dims: [[0, 15], [0, 38], [0, 72], ...], replaced with 0.
+```
+根据索引即可对照 `observations.py` 中的拼接顺序定位到具体是哪个关节位置/四元数分量/接触传感器。
+
+**事后分析流程**:
+1. 检查日志中的 NaN 维度索引，对照观测拼接顺序确定问题传感器/关节
+2. 加载 `.pt` 快照文件 (`torch.load("obs_nan_policy_*.pt")`)，查看完整张量值
+3. 如 NaN 出现在动作中，说明网络前向本身出问题，可开启 `anomaly_detect` 重跑定位
+
+**涉及文件**:
+- `sh/config/auto_train.yaml` — 新增 `debug.nan_trace`、`debug.anomaly_detect`
+- `scripts/skrl/train.py` — 新增 CLI 参数、快照保存逻辑、逐维度 NaN 索引日志
+- `sh/auto_train_loop.py` — 传递新参数
+- `custom_skrl_model.py` — 动作 NaN 快照保存
