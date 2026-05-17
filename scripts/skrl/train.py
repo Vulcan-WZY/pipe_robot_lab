@@ -250,6 +250,7 @@ class VisionIsaacLabWrapper(Wrapper):
         ts = _time.strftime("%Y%m%d_%H%M%S")
         fname = f"obs_nan_{key}_{ts}.pt"
         fpath = os.path.join(trace_dir, fname)
+        pipe_txt_path = os.path.join(trace_dir, f"{ts}.txt")
         try:
             torch.save({
                 "key": key,
@@ -261,6 +262,9 @@ class VisionIsaacLabWrapper(Wrapper):
                 "inf_count": int(torch.isinf(tensor).sum().item()),
                 "nan_dims": torch.isnan(tensor).nonzero(as_tuple=False)[:50].cpu().tolist(),
             }, fpath)
+            selected_pipe = os.environ.get("PIPE_ROBOT_SELECTED_PIPE_USD", "")
+            with open(pipe_txt_path, "w", encoding="utf-8") as f:
+                f.write(selected_pipe)
             logger.info(f"[NAN-TRACE] Saved observation snapshot to {fpath} "
                         f"(NaN count: {torch.isnan(tensor).sum().item()})")
         except Exception:

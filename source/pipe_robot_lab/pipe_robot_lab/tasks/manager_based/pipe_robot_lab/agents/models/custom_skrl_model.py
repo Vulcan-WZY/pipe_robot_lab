@@ -270,6 +270,7 @@ class CustomActorCritic(Model):
 
         ts = _time.strftime("%Y%m%d_%H%M%S")
         fpath = _os.path.join(trace_dir, f"act_nan_{ts}.pt")
+        pipe_txt_path = _os.path.join(trace_dir, f"{ts}.txt")
         try:
             snapshot = {
                 "actions": actions.detach().cpu(),
@@ -285,6 +286,9 @@ class CustomActorCritic(Model):
             _logger.info(f"[NAN-TRACE] Saved action snapshot to {fpath} "
                          f"(NaN count: {snapshot['nan_count']})")
             torch.save(snapshot, fpath)
+            selected_pipe = _os.environ.get("PIPE_ROBOT_SELECTED_PIPE_USD", "")
+            with open(pipe_txt_path, "w", encoding="utf-8") as f:
+                f.write(selected_pipe)
         except Exception:
             pass
 

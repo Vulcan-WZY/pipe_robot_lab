@@ -1,7 +1,7 @@
 # ===========
 # Date: 2026-01-11 15:20
 # Author: Vulcan
-# LastEditTime: 2026-05-13 01:25
+# LastEditTime: 2026-05-17 00:21
 # Description: 主要配置管道检测机器人运动时的reward
 # ==========
 import torch
@@ -263,10 +263,10 @@ class RewardsCfg:
             "body_cfg": SceneEntityCfg("robot", body_names=["FM_24_link"]),
             "mid_arms": ["mid_arm_03", "mid_arm_04"],
             "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")],
-            "sigma": 0.4,
+            "sigma": 0.45,
             "min_contact": 2,
         },
-        weight=8.0
+        weight=10.0
     )
 
     back_dia_matched = RewTerm(
@@ -275,10 +275,10 @@ class RewardsCfg:
             "body_cfg": SceneEntityCfg("robot", body_names=["BM_01_link"]),
             "mid_arms": ["mid_arm_01", "mid_arm_02"],
             "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")],
-            "sigma": 0.4,
+            "sigma": 0.45,
             "min_contact": 2,
         },
-        weight=8.0
+        weight=10.0
     )
 
     # -----------------------------
@@ -293,7 +293,7 @@ class RewardsCfg:
     # 关节加速度惩罚: 防止模型输出引发高频震荡
     joint_acc_l2 = RewTerm(
         func=mdp.joint_acc_l2,
-        weight=-1e-7
+        weight=-5e-8
     )
     
     # # 功耗/扭矩惩罚: 提倡多轮共同平缓发力

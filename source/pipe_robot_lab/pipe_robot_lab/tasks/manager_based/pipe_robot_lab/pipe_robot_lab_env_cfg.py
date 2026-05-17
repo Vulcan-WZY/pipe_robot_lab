@@ -54,6 +54,8 @@ for p in glob.glob(os.path.join(MESHES_DIR, "*.usd")):
 SELECTED_PIPE_STL = random.choice(all_pipe_stls) if all_pipe_stls else ""
 # 推导出对应的 JSON 文件路径
 SELECTED_PIPE_JSON = SELECTED_PIPE_STL.replace("usd", "json").replace(".usd", ".json") if SELECTED_PIPE_STL else ""
+# 暴露当前训练选中的管道路径，便于 NaN trace 同步记录来源管道
+os.environ["PIPE_ROBOT_SELECTED_PIPE_USD"] = os.path.abspath(SELECTED_PIPE_STL) if SELECTED_PIPE_STL else ""
 # * 根据选取的管路中第一节管道直径得到机器人加载位置偏置
 ROBOT_INIT_Z = 0.5 # 先给默认值
 if os.path.exists(SELECTED_PIPE_JSON):
