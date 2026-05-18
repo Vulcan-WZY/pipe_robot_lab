@@ -82,6 +82,15 @@ def wheel_contact_count_reward(
 
     return contact_count
 
+
+def _get_contact_count(env: ManagerBasedRLEnv, sensor_cfgs: list[SceneEntityCfg], threshold: float = 1.0) -> torch.Tensor:
+    """统计一侧或全身接触轮的数量。"""
+    contact_count = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    for cfg in sensor_cfgs:
+        force_mag = torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1, p=2).view(env.num_envs)
+        contact_count += (force_mag > threshold).to(torch.float32)
+    return contact_count
+
 def dia_matched_reward(
     env: ManagerBasedRLEnv,
     body_cfg: SceneEntityCfg,       # 输入的单侧夹持臂机体(如 FM_24_link / BM_01_link)
@@ -89,6 +98,7 @@ def dia_matched_reward(
     sensor_cfgs: list[SceneEntityCfg],  # 该侧对应的接触传感器列表
     sigma: float = 0.4,             # 误差容忍度 (弧度)
     min_contact: int = 2,           # 至少有几个轮子接触时才启用此奖励
+    pre_contact_scale: float = 0.15,
 ) -> torch.Tensor:
     """
     夹持臂角度与管道直径的匹配奖励.
@@ -101,10 +111,7 @@ def dia_matched_reward(
     asset = env.scene[body_cfg.name]
     
     # 0. 接触数条件掩码
-    contact_count = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-    for cfg in sensor_cfgs:
-        force_mag = torch.norm(env.scene.sensors[cfg.name].data.net_forces_w, dim=-1, p=2).view(env.num_envs)
-        contact_count += (force_mag > 1.0).to(torch.float32)
+    contact_count = _get_contact_count(env, sensor_cfgs, threshold=1.0)
     contact_mask = contact_count >= min_contact
     
     # 1. 获取该侧机体所在管道的局部信息
@@ -153,10 +160,40 @@ def dia_matched_reward(
     # 如果没在有效管段上, 奖励为0
     mean_reward = torch.where(valid_mask_seg, mean_reward, torch.zeros_like(mean_reward))
     
-    # 接触数不足时屏蔽奖励
-    mean_reward = torch.where(contact_mask, mean_reward, torch.zeros_like(mean_reward))
+    # 软门控: 接触前保留较弱引导，接触后给予完整奖励
+    gate = torch.where(contact_mask, torch.ones_like(mean_reward), torch.full_like(mean_reward, pre_contact_scale))
+    mean_reward = mean_reward * gate
     
     return mean_reward
+
+
+def up_arm_pre_grasp_reward(
+    env: ManagerBasedRLEnv,
+    body_cfg: SceneEntityCfg,
+    joint_names: list[str],
+    sensor_cfgs: list[SceneEntityCfg],
+    threshold: float = 1.0,
+    contact_stop_count: int = 1,
+) -> torch.Tensor:
+    """
+    预夹持阶段的弱引导：在尚未形成有效接触前，鼓励 up_arm 朝更夹紧的方向运动。
+    一旦接触形成，该奖励自动关闭，避免长期诱导策略无脑夹到极限。
+    """
+    asset = env.scene[body_cfg.name]
+    joint_ids = asset.find_joints(joint_names)[0]
+    joint_pos = asset.data.joint_pos[:, joint_ids]
+    joint_limits = asset.data.soft_joint_pos_limits[:, joint_ids]
+    joint_min = joint_limits[..., 0]
+    joint_max = joint_limits[..., 1]
+    joint_span = torch.clamp(joint_max - joint_min, min=1e-6)
+
+    # up_arm 越小越紧，将其映射到 [0, 1]
+    closeness = torch.clamp((joint_max - joint_pos) / joint_span, min=0.0, max=1.0)
+    mean_closeness = closeness.mean(dim=1)
+
+    contact_count = _get_contact_count(env, sensor_cfgs, threshold=threshold)
+    pre_contact_mask = contact_count < contact_stop_count
+    return torch.where(pre_contact_mask, mean_closeness, torch.zeros_like(mean_closeness))
 
 
 def steer_wheel_action_penalty(
@@ -170,6 +207,18 @@ def steer_wheel_action_penalty(
     actions = env.action_manager.action
     wheel_actions = actions[:, action_indices]
     return torch.sum(wheel_actions ** 2, dim=-1)
+
+
+def frozen_action_deviation_penalty(
+    env: ManagerBasedRLEnv,
+    action_indices: list[int],
+) -> torch.Tensor:
+    """
+    课程阶段对冻结动作维度仍保留一个轻微惩罚，帮助 actor 逐步学会这些维度应输出接近 0。
+    """
+    actions = env.action_manager.action
+    frozen_actions = actions[:, action_indices]
+    return torch.sum(frozen_actions ** 2, dim=-1)
 
 
 def bend_deviation_penalty(
@@ -265,8 +314,9 @@ class RewardsCfg:
             "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")],
             "sigma": 0.45,
             "min_contact": 2,
+            "pre_contact_scale": 0.15,
         },
-        weight=10.0
+        weight=6.0
     )
 
     back_dia_matched = RewTerm(
@@ -277,8 +327,33 @@ class RewardsCfg:
             "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")],
             "sigma": 0.45,
             "min_contact": 2,
+            "pre_contact_scale": 0.15,
         },
-        weight=10.0
+        weight=6.0
+    )
+
+    front_up_arm_pre_grasp = RewTerm(
+        func=up_arm_pre_grasp_reward,
+        params={
+            "body_cfg": SceneEntityCfg("robot"),
+            "joint_names": ["up_arm_03", "up_arm_04"],
+            "sensor_cfgs": [SceneEntityCfg("touch_m2"), SceneEntityCfg("touch_a3"), SceneEntityCfg("touch_a4")],
+            "threshold": 1.0,
+            "contact_stop_count": 1,
+        },
+        weight=0.25
+    )
+
+    back_up_arm_pre_grasp = RewTerm(
+        func=up_arm_pre_grasp_reward,
+        params={
+            "body_cfg": SceneEntityCfg("robot"),
+            "joint_names": ["up_arm_01", "up_arm_02"],
+            "sensor_cfgs": [SceneEntityCfg("touch_m1"), SceneEntityCfg("touch_a1"), SceneEntityCfg("touch_a2")],
+            "threshold": 1.0,
+            "contact_stop_count": 1,
+        },
+        weight=0.25
     )
 
     # -----------------------------
@@ -318,16 +393,16 @@ class RewardsCfg:
             "min_steps": 100,
             "no_contact_value": -6.0,
         },
-        weight=0.5
+        weight=0.75
     )
     
     # 舵轮动作惩罚: 夹持课程阶段锁定轮子不输出动作
     steer_wheel_lock = RewTerm(
-        func=steer_wheel_action_penalty,
+        func=frozen_action_deviation_penalty,
         params={
             "action_indices": list(range(0, 12)),
         },
-        weight=-0.5
+        weight=-0.25
     )
     
     # 弯折偏离惩罚: 夹持课程阶段冻结 bend 自由度
@@ -337,5 +412,5 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "joint_names": ["bend_01", "bend_02"],
         },
-        weight=-1.0
+        weight=-0.25
     )

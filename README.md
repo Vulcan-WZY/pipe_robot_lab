@@ -201,99 +201,26 @@ $$
 核心改动:
 
 1. **`auto_train_loop.py` 重写**:
+
    - 启动时一次性扫描 log 目录，按文件名编号（而非时间戳）找到最大 step 作为全局起点
    - 每轮结束后，外层精确计算 `global_timestep += steps_per_round`
    - 通过新增的 `--timestep_offset` 命令行参数将偏移量传给 `train.py`
    - checkpoint 清理改为**按文件名编号降序排列**保留最新 N 个，不再依赖时间戳
    - 每轮结束后验证预期的 checkpoint 是否存在，不存在时 fallback 检测并自动修正 global_timestep
-
 2. **`train.py` 新增 `--timestep_offset` 参数**:
+
    - 优先使用外部传入的偏移量，fallback 才从 checkpoint 文件名提取
    - 确保 monkey-patch 的偏移量始终由外层权威计算，不受 checkpoint 清理影响
 
 #### 新增 Play 推理演示脚本
 
 新增文件:
+
 - `sh/config/play.yaml` — 推理配置 (checkpoint路径、渲染模式、视频录制参数)
 - `sh/play_runner.py` — 读取 yaml、搜索 checkpoint、组装命令行参数
 - `sh/play.sh` — Shell 启动入口
 
-使用方式:
-
-| 命令 | 作用 |
-|------|------|
-| `./sh/play.sh` | 使用 play.yaml 默认配置运行推理 (GUI + 实时步频) |
-| `./sh/play.sh --headless --video` | 无头模式录制视频 |
-| `./sh/play.sh --num_envs 4` | 额外 CLI 参数直接透传给 play.py |
-
-配置文件 `sh/config/play.yaml` 中可设置 checkpoint 名称 (支持 `best_agent.pt` / 绝对路径 / `agent_xxxxx.pt`)、渲染模式、视频保存路径等。
-
-#### [严重BUG修复] CNN 视觉分支从未接收到真实深度图
-
-**问题**: `custom_skrl_model.py` 的 `compute` 方法中第一行为 `obs_dict = inputs["states"]`。但在 SKRL 新版本的 `PPO.act()` 实现中，环境观测数据被放在 `inputs["observations"]` 键中，而 `inputs["states"]` 对应的是 `env.state()` 的返回值（在我们的环境中始终为 `None`）。
-
-**后果**: 自项目开始以来的所有训练中，CNN 视觉分支的输入**始终为全零张量**（走 fallback 路径），导致：
-- 深度图信息从未参与策略决策
-- CNN 权重从未被有效梯度更新
-- 策略实质上退化为一个输入全零的 MLP，无法利用视觉信息
-
-**修复**: 将 `inputs["states"]` 改为 `inputs.get("observations", inputs.get("states", None))`，优先读取 `"observations"` 键（正常训练/推理路径），fallback 到 `"states"` 键（兼容 `init_state_dict` 阶段的探测调用）。
-
-**影响**: 此修复前产生的所有 checkpoint 权重均无效，需从头重新训练。
-
-#### 网络健康监控系统 (Network Diagnostics)
-
-为防止多模态网络中某个子模块"静默失效"（如 CNN 输入全零、梯度为零等），新增可开关的诊断系统。
-
-**开关位置**: `sh/config/auto_train.yaml` → `debug` 段
-
-```yaml
-debug:
-    enabled: true             # 总开关
-    log_interval: 50          # 每 50 次 PPO 更新记录一次
-    log_images: true          # 将深度图写入 TensorBoard Images tab
-    log_grad_norm: true       # 记录 CNN/MLP/Fusion 各模块梯度范数
-    log_activation_stats: true # 记录激活值均值与标准差
-    assert_nonzero_input: true # 断言输入非全零
-```
-
-**TensorBoard 中新增的指标** (Diagnostics/ 前缀):
-
-| 指标名 | 含义 | 异常判断 |
-|--------|------|----------|
-| `grad_norm_cnn` | CNN+vision_proj 梯度 L2 范数 | 持续为 0 → 视觉分支未训练 |
-| `grad_norm_prop_mlp` | 本体 MLP 梯度范数 | 远大于 CNN → 视觉信号无效 |
-| `grad_norm_fusion` | 融合层+输出层梯度范数 | 为 0 → 整体反向传播中断 |
-| `activation_mean/std_vision` | CNN 输出特征统计 | mean恒为0 → 输入或前向有问题 |
-| `activation_mean/std_prop` | 本体 MLP 输出特征统计 | 同上 |
-| `input_mean_depth` | 深度图输入均值 | 恒为 0 → 相机数据未送入 |
-| `input_nonzero_ratio` | 深度图非零像素占比 | 恒为 0 → 同上 |
-| `depth_input_ch0_front` | 前置深度图可视化 (Images tab) | 全黑 → 相机失效 |
-| `depth_input_ch1_back` | 后置深度图可视化 (Images tab) | 全黑 → 同上 |
-
-**性能影响**: 诊断模块仅在 `debug.enabled=true` 时激活，每次前向传播额外开销为 4 次 `.detach()` 调用（约 0.01ms），TensorBoard 写入仅在 log_interval 间隔触发。关闭 debug 后零开销。
-
-#### 相机 clipping_range 调优
-
-将前后深度相机的 `clipping_range` 从 `(0.1, 10.0)` 改为 `(0.01, 3.0)`。原因：机器人在管道外表面夹持，相机到管壁的有效距离约 0.05~1.5m，10m 量程导致归一化后有效信息仅占值域 5%~15%，CNN 需要额外学会放大这个极小的差异。缩小量程后深度图信息密度提升约 7 倍。
-
-#### 深度图 TensorBoard 可视化修复
-
-诊断模块写入 Images tab 时显示全黑，原因是归一化后深度值集中在 0.05~0.15（对应灰度极暗）。修复为写入前对每帧做独立的 **min-max 拉伸到 [0,1]**，确保管道轮廓清晰可见。
-
-#### PPO 超参数调优（正式训练前）
-
-| 参数 | 调整前 | 调整后 | 理由 |
-|------|--------|--------|------|
-| `learning_epochs` | 5 | 8 | CNN 特征需要更多 epoch 从稀疏梯度中提取 |
-| `mini_batches` | 4 | 8 | 更小 batch size 让 CNN 获得更频繁的梯度更新 |
-| `kl_threshold` | 0.008 | 0.012 | CNN+MLP 的 KL 波动天然更大，过紧会频繁压低 lr |
-| `value_clip` | 0.3 | 0.2 | 收紧 Critic 更新幅度，增强稳定性 |
-| `time_limit_bootstrap` | False | True | 超时截断时 bootstrap 可减少对长生存策略的负偏估 |
-
-这些改动零额外时间开销，但提升了样本利用效率。
-
-### 0516
+0516
 
 #### 三层 NaN/Inf 防御体系（阻断仿真异常→训练的传染链）
 
@@ -331,6 +258,7 @@ debug:
 - 所有安全 checkpoint 都损坏时，fatal error 退出避免静默扩散
 
 **关键设计考量**:
+
 - L1 + L2 解决**本轮训练被污染**的问题（实时阻断）
 - L3 解决**即使本轮污染了，也不影响下一轮**的问题（事后隔离）
 - 三层互相独立，任一层失效不影响其他层的保护能力
@@ -345,14 +273,15 @@ debug:
 
 **使用方式**:
 
-| `background` 值 | 行为 | 适用场景 |
-|:---:|---|---|
-| `true` (默认) | tmux 后台运行，断联不中断 | 长期正式训练 |
-| `false` | 终端前台直接运行，Ctrl+C 中断 | 调试验证改动 |
+| `background` 值 | 行为                          | 适用场景     |
+| :---------------: | ----------------------------- | ------------ |
+|  `true` (默认)  | tmux 后台运行，断联不中断     | 长期正式训练 |
+|     `false`     | 终端前台直接运行，Ctrl+C 中断 | 调试验证改动 |
 
 切换到前台模式时，`start_curriculum.sh attach` 和 `stop` 命令会自动适配（attach 提示无需连接，stop 只停 TensorBoard）。
 
 **涉及文件**:
+
 - `sh/config/auto_train.yaml` — 新增 `debug.background` 字段
 - `sh/start_curriculum.sh` — 读取 yaml 配置，分支执行前台/后台逻辑
 
@@ -362,9 +291,9 @@ debug:
 
 **方案**: 在 `debug` 段新增两个开关：
 
-| 配置项 | 默认值 | 作用 |
-|--------|:---:|------|
-| `nan_trace` | `true` | 首次检测到 NaN 时保存完整张量快照到 `<log_dir>/nan_traces/` 目录 |
+| 配置项             |  默认值  | 作用                                                                                  |
+| ------------------ | :-------: | ------------------------------------------------------------------------------------- |
+| `nan_trace`      | `true` | 首次检测到 NaN 时保存完整张量快照到 `<log_dir>/nan_traces/` 目录                    |
 | `anomaly_detect` | `false` | 启用 PyTorch `autograd.set_detect_anomaly(True)`，定位反向传播中产生 NaN 的具体操作 |
 
 **nan_trace 快照包含**:
@@ -373,19 +302,219 @@ debug:
 - **动作快照** (`act_nan_<timestamp>.pt`): 原始动作张量 (归零前)、NaN 维度索引、当前 log_std 值
 
 **增强日志**: 检测到 NaN 时日志会同时打印前 20 个具体的 NaN 维度索引，例如:
+
 ```
 [OBS-NaN] NaN detected in observation key 'policy',
   NaN dims: [[0, 15], [0, 38], [0, 72], ...], replaced with 0.
 ```
+
 根据索引即可对照 `observations.py` 中的拼接顺序定位到具体是哪个关节位置/四元数分量/接触传感器。
 
 **事后分析流程**:
+
 1. 检查日志中的 NaN 维度索引，对照观测拼接顺序确定问题传感器/关节
 2. 加载 `.pt` 快照文件 (`torch.load("obs_nan_policy_*.pt")`)，查看完整张量值
 3. 如 NaN 出现在动作中，说明网络前向本身出问题，可开启 `anomaly_detect` 重跑定位
 
 **涉及文件**:
+
 - `sh/config/auto_train.yaml` — 新增 `debug.nan_trace`、`debug.anomaly_detect`
 - `scripts/skrl/train.py` — 新增 CLI 参数、快照保存逻辑、逐维度 NaN 索引日志
 - `sh/auto_train_loop.py` — 传递新参数
 - `custom_skrl_model.py` — 动作 NaN 快照保存
+
+### 0518
+
+#### 第一阶段夹持课程的收敛性改造
+
+本轮改动的目标不是直接追求多管径泛化，而是先把**固定单管道场景下的夹持课程训练稳定下来**，包括：
+
+- 避免继续出现历史上那种 checkpoint / actor 输出 NaN 污染
+- 让策略先学会 `up_arm` 收紧 + `mid_arm` 管径适配 + 稳定接触
+- 在不改 actor 输出维度的前提下，通过动作课程冻结无关自由度
+
+当前阶段的具体策略如下：
+
+1. **补齐观测闭环**
+
+- 在 policy observation 中新增 `up_arm` 归一化位置
+- 暂时保留原有 `up_arm` 力矩观测
+- 新增 6 个轮子的连续接触力观测，用于训练阶段提供更平滑的接近信号
+- 接触的二值状态 (`1 / -1`) 仍然保留，便于后续保持与真机部署的抽象一致性
+
+2. **引入更稠密的弱引导 reward**
+
+- 新增 `up_arm_pre_grasp_reward`
+  - 只在尚未形成有效接触前生效
+  - `up_arm` 越往“夹紧”方向运动，给越弱但连续的正向引导
+  - 一旦形成接触自动关闭，避免无脑把大臂夹到极限
+- 将 `dia_matched_reward` 从硬门控改为**软门控**
+  - 接触后给完整奖励
+  - 接触前仍保留较小比例的几何匹配引导
+
+3. **动作课程冻结**
+
+- 当前阶段保持 actor 的 22 维输出结构不变，保证 checkpoint 结构以后可以直接续训
+- 但在动作执行层：
+  - 6 组 `steer_wheel` 全部冻结
+  - `bend_01 / bend_02` 全部冻结
+- 这样当前阶段只让策略真正学习：
+  - `mid_arm`
+  - `up_arm`
+
+4. **深度输入数值修正**
+
+- 修正了深度图进入网络前的重复归一化问题
+- 之前 observation 已经做过 `/10.0` 归一化，模型侧又做了一次 `/10.0`
+- 现在模型侧只做 NaN/Inf 清洗和 `[0, 1]` clamp，不再重复缩放
+
+5. **当前阶段的训练验收标准**
+
+- fresh start 与 resume 都不应再出现新的 NaN 污染
+- 单根管道上训练应逐步收敛，而不是长期剧烈发散
+- `Episode / Total timesteps` 应整体向超时上限靠近
+- `dia_match` 与接触相关项应从“几乎不激活”变为“稳定可见”
+
+---
+
+## Future Roadmap
+
+这一节专门记录**中期异构环境改造规划**，避免后续上下文丢失时遗忘当前讨论结果。
+
+### 目标
+
+让每个并行 env 都能够加载**不同的管道 USD + 对应 JSON 描述文件**，从而在同一轮 PPO 采样中同时见到多种管径/多种管网，提高真正的多管径适配能力。
+
+### 当前技术障碍
+
+当前工程虽然已经能在每轮训练启动时随机选择一根管道，但本质上仍然是：
+
+- 本轮所有 env 共用同一个 `usd`
+- 本轮所有 reward / observation / termination 共用同一份 `pipe_info / pipe_transform_inv`
+
+也就是说，当前几何匹配工具链默认是：
+
+- `points`: `[num_envs, 3]`
+- `pipe metadata`: `[num_segments, ...]`
+
+而不是未来需要的：
+
+- `points`: `[num_envs, 3]`
+- `pipe metadata`: `[num_envs, num_segments, ...]`
+
+### 中期改造步骤
+
+1. **场景层异构化**
+
+- 将 `InteractiveSceneCfg.replicate_physics` 切换为 `False`
+- 允许每个 env 持有独立资产实例，而不是基于 `env_0` 的物理复制
+- 为每个 env 分别指定管道 `usd_path`
+
+2. **管道元数据改造**
+
+- 将当前单份 `pipe_info / pipe_transform / pipe_transform_inv` 改造为按 env 存储
+- 支持每个 env 对应不同长度、不同段数的管网描述
+- 需要设计 padding / mask 或 ragged 访问方案
+
+3. **几何查询函数重构**
+
+- 重写 `pipe_geom_utils.py` 中的几何匹配入口
+- 让 `get_cached_pipe_info()`、`get_target_relative_pose()`、`is_point_on_pipe()` 支持按 env 取各自 metadata
+- 当前单帧缓存逻辑也要升级为按 env/step 管理
+
+4. **奖励与终止项升级**
+
+- `dia_match`
+- `reach_goal`
+- `progress_reward`
+- `pose_error`
+
+以上所有依赖 `pipe_info` 的项都要切换到 per-env metadata 查询
+
+5. **训练策略**
+
+- 异构 env 改造建议单独开分支进行
+- 先在当前单管课程阶段稳定收敛
+- 再迁移到多 env 随机管道泛化训练
+
+### 保留的原则
+
+- 真机上难以可靠拿到连续接触力，因此最终部署时不应强依赖接触力作为唯一核心信号
+- 但训练阶段允许使用更平滑的几何/接触辅助信号，帮助学习形成稳定夹持
+- 多管径泛化必须建立在“单管先能稳定收敛”的基础之上
+
+使用方式:
+
+| 命令                                | 作用                                             |
+| ----------------------------------- | ------------------------------------------------ |
+| `./sh/play.sh`                    | 使用 play.yaml 默认配置运行推理 (GUI + 实时步频) |
+| `./sh/play.sh --headless --video` | 无头模式录制视频                                 |
+| `./sh/play.sh --num_envs 4`       | 额外 CLI 参数直接透传给 play.py                  |
+
+配置文件 `sh/config/play.yaml` 中可设置 checkpoint 名称 (支持 `best_agent.pt` / 绝对路径 / `agent_xxxxx.pt`)、渲染模式、视频保存路径等。
+
+#### [严重BUG修复] CNN 视觉分支从未接收到真实深度图
+
+**问题**: `custom_skrl_model.py` 的 `compute` 方法中第一行为 `obs_dict = inputs["states"]`。但在 SKRL 新版本的 `PPO.act()` 实现中，环境观测数据被放在 `inputs["observations"]` 键中，而 `inputs["states"]` 对应的是 `env.state()` 的返回值（在我们的环境中始终为 `None`）。
+
+**后果**: 自项目开始以来的所有训练中，CNN 视觉分支的输入**始终为全零张量**（走 fallback 路径），导致：
+
+- 深度图信息从未参与策略决策
+- CNN 权重从未被有效梯度更新
+- 策略实质上退化为一个输入全零的 MLP，无法利用视觉信息
+
+**修复**: 将 `inputs["states"]` 改为 `inputs.get("observations", inputs.get("states", None))`，优先读取 `"observations"` 键（正常训练/推理路径），fallback 到 `"states"` 键（兼容 `init_state_dict` 阶段的探测调用）。
+
+**影响**: 此修复前产生的所有 checkpoint 权重均无效，需从头重新训练。
+
+#### 网络健康监控系统 (Network Diagnostics)
+
+为防止多模态网络中某个子模块"静默失效"（如 CNN 输入全零、梯度为零等），新增可开关的诊断系统。
+
+**开关位置**: `sh/config/auto_train.yaml` → `debug` 段
+
+```yaml
+debug:
+    enabled: true             # 总开关
+    log_interval: 50          # 每 50 次 PPO 更新记录一次
+    log_images: true          # 将深度图写入 TensorBoard Images tab
+    log_grad_norm: true       # 记录 CNN/MLP/Fusion 各模块梯度范数
+    log_activation_stats: true # 记录激活值均值与标准差
+    assert_nonzero_input: true # 断言输入非全零
+```
+
+**TensorBoard 中新增的指标** (Diagnostics/ 前缀):
+
+| 指标名                         | 含义                          | 异常判断                      |
+| ------------------------------ | ----------------------------- | ----------------------------- |
+| `grad_norm_cnn`              | CNN+vision_proj 梯度 L2 范数  | 持续为 0 → 视觉分支未训练    |
+| `grad_norm_prop_mlp`         | 本体 MLP 梯度范数             | 远大于 CNN → 视觉信号无效    |
+| `grad_norm_fusion`           | 融合层+输出层梯度范数         | 为 0 → 整体反向传播中断      |
+| `activation_mean/std_vision` | CNN 输出特征统计              | mean恒为0 → 输入或前向有问题 |
+| `activation_mean/std_prop`   | 本体 MLP 输出特征统计         | 同上                          |
+| `input_mean_depth`           | 深度图输入均值                | 恒为 0 → 相机数据未送入      |
+| `input_nonzero_ratio`        | 深度图非零像素占比            | 恒为 0 → 同上                |
+| `depth_input_ch0_front`      | 前置深度图可视化 (Images tab) | 全黑 → 相机失效              |
+| `depth_input_ch1_back`       | 后置深度图可视化 (Images tab) | 全黑 → 同上                  |
+
+**性能影响**: 诊断模块仅在 `debug.enabled=true` 时激活，每次前向传播额外开销为 4 次 `.detach()` 调用（约 0.01ms），TensorBoard 写入仅在 log_interval 间隔触发。关闭 debug 后零开销。
+
+#### 相机 clipping_range 调优
+
+将前后深度相机的 `clipping_range` 从 `(0.1, 10.0)` 改为 `(0.01, 3.0)`。原因：机器人在管道外表面夹持，相机到管壁的有效距离约 0.05~1.5m，10m 量程导致归一化后有效信息仅占值域 5%~15%，CNN 需要额外学会放大这个极小的差异。缩小量程后深度图信息密度提升约 7 倍。
+
+#### 深度图 TensorBoard 可视化修复
+
+诊断模块写入 Images tab 时显示全黑，原因是归一化后深度值集中在 0.05~0.15（对应灰度极暗）。修复为写入前对每帧做独立的 **min-max 拉伸到 [0,1]**，确保管道轮廓清晰可见。
+
+#### PPO 超参数调优（正式训练前）
+
+| 参数                     | 调整前 | 调整后 | 理由                                            |
+| ------------------------ | ------ | ------ | ----------------------------------------------- |
+| `learning_epochs`      | 5      | 8      | CNN 特征需要更多 epoch 从稀疏梯度中提取         |
+| `mini_batches`         | 4      | 8      | 更小 batch size 让 CNN 获得更频繁的梯度更新     |
+| `kl_threshold`         | 0.008  | 0.012  | CNN+MLP 的 KL 波动天然更大，过紧会频繁压低 lr   |
+| `value_clip`           | 0.3    | 0.2    | 收紧 Critic 更新幅度，增强稳定性                |
+| `time_limit_bootstrap` | False  | True   | 超时截断时 bootstrap 可减少对长生存策略的负偏估 |
+
+这些改动零额外时间开销，但提升了样本利用效率。

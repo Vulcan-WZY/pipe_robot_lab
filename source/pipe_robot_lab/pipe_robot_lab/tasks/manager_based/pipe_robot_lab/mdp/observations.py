@@ -38,6 +38,18 @@ def get_depth_image(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, normaliz
     
     return depth_data.clone() # 返回这部分数据的拷贝
 
+
+def get_joint_pos_normalized(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """返回指定关节的归一化位置，范围约为 [-1, 1]。"""
+    asset = env.scene[asset_cfg.name]
+    joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    joint_limits = asset.data.soft_joint_pos_limits[:, asset_cfg.joint_ids]
+    joint_min = joint_limits[..., 0]
+    joint_max = joint_limits[..., 1]
+    joint_center = 0.5 * (joint_min + joint_max)
+    joint_half_range = torch.clamp(0.5 * (joint_max - joint_min), min=1e-6)
+    return ((joint_pos - joint_center) / joint_half_range).view(env.num_envs, -1)
+
 def get_imu_orientation(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Read IMU orientation (quat_w) from sensor."""
     sensor = env.scene.sensors[sensor_cfg.name]
@@ -61,6 +73,13 @@ def get_contact_state(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, thresh
     # 当力大于阈值时，认为是1.0，否则为-1.0
     state = torch.where(force_mag > threshold, torch.tensor(1.0, device=env.device), torch.tensor(-1.0, device=env.device))
     return state.view(env.num_envs, 1)
+
+
+def get_contact_force(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, scale: float = 0.1) -> torch.Tensor:
+    """返回连续接触力观测，供训练阶段提供更平滑的几何接近信号。"""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    force_mag = torch.norm(sensor.data.net_forces_w, dim=-1, p=2).view(env.num_envs, 1)
+    return force_mag * scale
 
 def body_quat_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """ 仅返回刚体在世界坐标系下的四元数姿态(wxyz) """
@@ -141,6 +160,15 @@ class ObservationsCfg:
                 "asset_cfg": SceneEntityCfg("robot",
                     joint_names=[".*mid_arm_.*"]
                 )            
+            }
+        )
+        # 观测所有大臂 up_arm 位置，帮助策略感知“夹紧”动作已经执行到什么程度
+        up_arm_pos = ObsTerm(
+            func=get_joint_pos_normalized,
+            params={
+                "asset_cfg": SceneEntityCfg("robot",
+                    joint_names=[".*up_arm_.*"]
+                )
             }
         )
         # 观测所有大臂up_arm力矩
@@ -240,6 +268,31 @@ class ObservationsCfg:
                 "sensor_cfg": SceneEntityCfg("touch_a4"),
                 "threshold": 1.0
             }
+        )
+        # 连续接触力仅用于训练期提供稠密观测，后续真机部署可关闭或移至 critic
+        force_m1 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_m1"), "scale": 0.1}
+        )
+        force_m2 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_m2"), "scale": 0.1}
+        )
+        force_a1 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_a1"), "scale": 0.1}
+        )
+        force_a2 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_a2"), "scale": 0.1}
+        )
+        force_a3 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_a3"), "scale": 0.1}
+        )
+        force_a4 = ObsTerm(
+            func=get_contact_force,
+            params={"sensor_cfg": SceneEntityCfg("touch_a4"), "scale": 0.1}
         )
         # 历史动作序列 (提供过去连续 5 步的期望指令)
         # 这有助于网络理解驱动延迟、阻力和机械惯性

@@ -313,10 +313,11 @@ class CustomActorCritic(Model):
             img_front = torch.zeros(batch_size, 1, self._cam_h, self._cam_w, device=device)
             img_back = torch.zeros(batch_size, 1, self._cam_h, self._cam_w, device=device)
         else:
-            img_front = torch.nan_to_num(img_front, nan=0.0, posinf=10.0, neginf=0.0)
-            img_back = torch.nan_to_num(img_back, nan=0.0, posinf=10.0, neginf=0.0)
-            img_front = torch.clamp(img_front, 0.0, 10.0) / 10.0
-            img_back = torch.clamp(img_back, 0.0, 10.0) / 10.0
+            # observation 已完成一次归一化，这里只做数值清洗避免再次缩放导致深度信号过弱
+            img_front = torch.nan_to_num(img_front, nan=0.0, posinf=1.0, neginf=0.0)
+            img_back = torch.nan_to_num(img_back, nan=0.0, posinf=1.0, neginf=0.0)
+            img_front = torch.clamp(img_front, 0.0, 1.0)
+            img_back = torch.clamp(img_back, 0.0, 1.0)
 
         img_input = torch.cat([img_front, img_back], dim=1)
         vision_features = self.vision_proj(self.cnn(img_input))

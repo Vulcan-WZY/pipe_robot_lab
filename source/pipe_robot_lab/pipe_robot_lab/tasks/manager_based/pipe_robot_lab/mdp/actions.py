@@ -117,6 +117,7 @@ class SteerWheelActionCfg(mdp.JointVelocityActionCfg):
     # 与轮电机配套对应的舵电机
     steer_joint_names: list[str] = [".*steer_.*"]
     scale: float = 1.0
+    freeze: bool = False
     def __post_init__(self):
         self.class_type = SteerWheelAction
         super().__post_init__()
@@ -166,7 +167,10 @@ class SteerWheelAction(mdp.JointVelocityAction):
     def action_dim(self):
         return 2
     def process_actions(self, actions: torch.Tensor) -> torch.Tensor:
-        self._processed_actions = actions * self.cfg.scale
+        if self.cfg.freeze:
+            self._processed_actions = torch.zeros_like(actions)
+        else:
+            self._processed_actions = actions * self.cfg.scale
         return self._processed_actions
     def apply_actions(self):
         # Input: [Vx, Vy] -> (Num_Envs, 2)
@@ -236,8 +240,40 @@ class SteerWheelAction(mdp.JointVelocityAction):
         final_angle_cmd = torch.where(active_mask, target_angle, current_pos)
         
         # 6. 下发指令
+        if self.cfg.freeze:
+            final_speed = torch.zeros_like(final_speed)
+            final_angle_cmd = current_pos
         self._asset.set_joint_velocity_target(final_speed, joint_ids=self._joint_ids)
         self._asset.set_joint_position_target(final_angle_cmd, joint_ids=self.steer_joint_idxs)
+
+
+@configclass
+class FrozenJointPositionActionCfg(mdp.JointPositionActionCfg):
+    """课程阶段用的冻结位置动作项，忽略 policy 输出并保持默认姿态。"""
+    class_type = None
+
+    def __post_init__(self):
+        self.class_type = FrozenJointPositionAction
+        super().__post_init__()
+
+
+class FrozenJointPositionAction(mdp.JointPositionAction):
+    cfg: FrozenJointPositionActionCfg
+
+    def __init__(self, cfg: FrozenJointPositionActionCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._frozen_target = self._asset.data.default_joint_pos[:, self._joint_ids].clone()
+
+    def process_actions(self, actions: torch.Tensor):
+        super().process_actions(actions)
+        self._processed_actions = self._frozen_target
+        return self._processed_actions
+
+    def reset(self, env_ids=None) -> None:
+        super().reset(env_ids=env_ids)
+        if env_ids is None:
+            env_ids = slice(None)
+        self._processed_actions[env_ids] = self._frozen_target[env_ids]
 
 # =============================================================================
 # * MDP Action 注册
@@ -256,36 +292,42 @@ class ActionsCfg:
         steer_joint_names=[".*assist_steer_01"],  # 左后辅助轮舵向
         # 通过scale将线速度转换为角速度： wheel_ang_vel = line_vel / wheel_radius
         scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
+        freeze = True,
     )
     steer_wheel_02 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_02"],        # 右后辅助轮
         steer_joint_names=[".*assist_steer_02"],  # 右后辅助轮
         scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
+        freeze = True,
     )
     steer_wheel_03 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*main_wheel_01"],          # 中后主动轮
         steer_joint_names=[".*main_steer_01"],    # 中后主动轮舵向
         scale = MAX_LINE_SPEED / MAIN_WHEEL_R,
+        freeze = True,
     )
     steer_wheel_04 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_03"],          # 左前辅助轮
         steer_joint_names=[".*assist_steer_03"],    # 左前辅助轮
         scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
+        freeze = True,
     )
     steer_wheel_05 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*assist_wheel_04"],          # 右前辅助轮
         steer_joint_names=[".*assist_steer_04"],    # 右前辅助轮
         scale = MAX_LINE_SPEED / ASSIST_WHEEL_R,
+        freeze = True,
     )
     steer_wheel_06 = SteerWheelActionCfg(
         asset_name="robot",
         joint_names=[".*main_wheel_02"],          # 中前主动轮
         steer_joint_names=[".*main_steer_02"],    # 中前主动轮
         scale = MAX_LINE_SPEED / MAIN_WHEEL_R,
+        freeze = True,
     )
     # -------------------------------------------------------------------------
     # ! 机械臂与弯折 (Manipulators)
@@ -321,17 +363,16 @@ class ActionsCfg:
         offset = UP_ARM_OFFSET, 
     )
     # * 机身弯折控制
-    bend_01 = mdp.JointPositionActionCfg(
+    bend_01 = FrozenJointPositionActionCfg(
         asset_name="robot",
         joint_names=["bend_01"],
         scale = BEND_SCALE,
         offset = BEND_OFFSET,
     )
-    bend_02 = mdp.JointPositionActionCfg(
+    bend_02 = FrozenJointPositionActionCfg(
         asset_name="robot",
         joint_names=["bend_02"],
         scale = BEND_SCALE,
         offset = BEND_OFFSET,
     )
     # =============================================================================
-
