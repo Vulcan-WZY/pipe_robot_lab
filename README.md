@@ -375,6 +375,37 @@ $$
 - `Episode / Total timesteps` 应整体向超时上限靠近
 - `dia_match` 与接触相关项应从“几乎不激活”变为“稳定可见”
 
+6. **近期新增的 critic 数值稳定性排查**
+
+- 在确认 `log_std` 分支暂时稳定后，新的主要风险转移到了 critic/value 路径
+- 新增 TensorBoard 诊断项：
+  - `Diagnostics/value_pred_min`
+  - `Diagnostics/value_pred_max`
+  - `Diagnostics/value_pred_mean`
+  - `Diagnostics/value_preproc_mean`
+  - `Diagnostics/value_preproc_var`
+- 进一步补充 returns 调试统计：
+  - `Diagnostics/reward_*`
+  - `Diagnostics/value_target_raw_*`
+  - `Diagnostics/value_target_proc_*`
+  - `Diagnostics/returns_*`
+  - `Diagnostics/advantages_*`
+- 这些统计先用于给“保留 value_preprocessor”的实验建立基线
+- 当前已进入下一阶段：**关闭 `value_preprocessor` 的对照实验**
+  - 目的不是绕开问题，而是验证 `RunningStandardScaler` 是否就是导致 critic 数值链失控的主因
+  - 由于 skrl 加载 checkpoint 时会跳过当前 agent 不存在的模块，因此可以直接从旧的 `22400.pt` 继续做对照训练
+- 临时将 `time_limit_bootstrap` 关闭，用于隔离“超时 bootstrap 是否在放大 returns 尺度”这一因素
+- 关闭 preprocessor 后，`Diagnostics/value_preproc_mean/var` 将不再有意义；重点转为观察：
+  - `Diagnostics/value_target_raw_*`
+  - `Diagnostics/returns_*`
+  - `Diagnostics/value_pred_*`
+  - `Loss / Value loss`
+- 对照实验结果：在关闭 `value_preprocessor` 后，已成功从 `22400.pt` 稳定跑完一轮并产出干净的 `agent_25600.pt / best_agent.pt`
+- 因此下一步正常训练建议：
+  - 保持 `value_preprocessor: null`
+  - 保持 `time_limit_bootstrap: False`
+  - 重新切换到新的空日志目录，继续观察是否能跨多轮长期稳定训练
+
 ---
 
 ## Future Roadmap

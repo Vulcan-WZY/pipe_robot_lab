@@ -89,6 +89,38 @@ class NetworkDiagnostics:
         self._writer.add_scalar("Diagnostics/grad_norm_cnn", cnn_grad_norm ** 0.5, global_step)
         self._writer.add_scalar("Diagnostics/grad_norm_prop_mlp", prop_grad_norm ** 0.5, global_step)
         self._writer.add_scalar("Diagnostics/grad_norm_fusion", fusion_grad_norm ** 0.5, global_step)
+
+        if hasattr(model, "distribution"):
+            try:
+                dist = model.distribution(role="policy")
+                if hasattr(dist, "scale") and dist.scale is not None:
+                    log_std = torch.log(torch.clamp(dist.scale, min=1e-8))
+                    self._writer.add_scalar("Diagnostics/log_std_min", log_std.min().item(), global_step)
+                    self._writer.add_scalar("Diagnostics/log_std_max", log_std.max().item(), global_step)
+                    self._writer.add_scalar("Diagnostics/log_std_mean", log_std.mean().item(), global_step)
+            except Exception:
+                pass
+
+        if hasattr(model, "output_layer") and hasattr(model, "is_critic") and model.is_critic:
+            try:
+                if self._last_prop_input is not None and self._last_vision_input is not None:
+                    value, _ = model.compute(
+                        {
+                            "states": {
+                                "camera": {
+                                    "depth_front": self._last_vision_input[:, 0:1],
+                                    "depth_back": self._last_vision_input[:, 1:2],
+                                },
+                                "critic": self._last_prop_input,
+                            }
+                        },
+                        role="value",
+                    )
+                    self._writer.add_scalar("Diagnostics/value_pred_min", value.min().item(), global_step)
+                    self._writer.add_scalar("Diagnostics/value_pred_max", value.max().item(), global_step)
+                    self._writer.add_scalar("Diagnostics/value_pred_mean", value.mean().item(), global_step)
+            except Exception:
+                pass
         self._writer.flush()
 
 

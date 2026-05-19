@@ -493,6 +493,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent = runner.agent
         _original_write_tracking = agent.write_tracking_data.__func__
         _original_write_checkpoint = agent.write_checkpoint.__func__
+        _original_update = agent.update.__func__
         _offset = start_timestep
 
         import types
@@ -509,10 +510,70 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             _original_write_tracking(self, timestep=global_ts, timesteps=timesteps + _offset)
             if args_cli.debug and _diag.should_log():
                 _diag.log_to_writer(runner.agent.policy, global_ts)
+                try:
+                    value_model = getattr(runner.agent, "value", None)
+                    if value_model is not None:
+                        _diag.log_to_writer(value_model, global_ts)
+                except Exception:
+                    pass
+                try:
+                    value_preprocessor = getattr(runner.agent, "_value_preprocessor", None)
+                    writer = getattr(_diag, "_writer", None)
+                    if writer is not None and value_preprocessor is not None:
+                        running_mean = getattr(value_preprocessor, "running_mean", None)
+                        running_variance = getattr(value_preprocessor, "running_variance", None)
+                        if torch.is_tensor(running_mean):
+                            writer.add_scalar("Diagnostics/value_preproc_mean", running_mean.mean().item(), global_ts)
+                        if torch.is_tensor(running_variance):
+                            writer.add_scalar("Diagnostics/value_preproc_var", running_variance.mean().item(), global_ts)
+                        writer.flush()
+                except Exception:
+                    pass
+
+        def _log_tensor_stats(writer, tag_prefix, tensor, global_ts):
+            if writer is None or tensor is None or not torch.is_tensor(tensor):
+                return
+            finite = torch.isfinite(tensor)
+            finite_vals = tensor[finite]
+            if finite_vals.numel() > 0:
+                writer.add_scalar(f"{tag_prefix}_min", finite_vals.min().item(), global_ts)
+                writer.add_scalar(f"{tag_prefix}_max", finite_vals.max().item(), global_ts)
+                writer.add_scalar(f"{tag_prefix}_mean", finite_vals.float().mean().item(), global_ts)
+                writer.add_scalar(f"{tag_prefix}_std", finite_vals.float().std(unbiased=False).item(), global_ts)
+            writer.add_scalar(f"{tag_prefix}_finite_ratio", finite.float().mean().item(), global_ts)
+
+        def _patched_update(self, *, timestep, timesteps):
+            global_ts = timestep + _offset
+            writer = getattr(_diag, "_writer", None) if args_cli.debug else None
+            try:
+                if writer is not None:
+                    rewards = self.memory.get_tensor_by_name("rewards")
+                    values = self.memory.get_tensor_by_name("values")
+                    _log_tensor_stats(writer, "Diagnostics/reward", rewards, global_ts)
+                    _log_tensor_stats(writer, "Diagnostics/value_target_raw", values, global_ts)
+            except Exception:
+                pass
+
+            result = _original_update(self, timestep=timestep, timesteps=timesteps)
+
+            try:
+                if writer is not None:
+                    values = self.memory.get_tensor_by_name("values")
+                    returns = self.memory.get_tensor_by_name("returns")
+                    advantages = self.memory.get_tensor_by_name("advantages")
+                    _log_tensor_stats(writer, "Diagnostics/value_target_proc", values, global_ts)
+                    _log_tensor_stats(writer, "Diagnostics/returns", returns, global_ts)
+                    _log_tensor_stats(writer, "Diagnostics/advantages", advantages, global_ts)
+                    writer.flush()
+            except Exception:
+                pass
+
+            return result
 
         def _patched_write_checkpoint(self, *, timestep, timesteps):
             _original_write_checkpoint(self, timestep=timestep + _offset, timesteps=timesteps + _offset)
 
+        agent.update = types.MethodType(_patched_update, agent)
         agent.write_tracking_data = types.MethodType(_patched_write_tracking, agent)
         agent.write_checkpoint = types.MethodType(_patched_write_checkpoint, agent)
         print(f"[INFO] ⏱️ Monkey-patched Agent with timestep offset = {_offset} for TensorBoard & checkpoint naming.")

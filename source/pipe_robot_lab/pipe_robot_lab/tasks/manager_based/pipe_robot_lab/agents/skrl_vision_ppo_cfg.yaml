@@ -27,17 +27,17 @@ agent:
     lambda: 0.95 # GAE 的 lambda；在偏差与方差之间折中，0.95 是常见稳健默认值
     # **由于加入了 CNN (多模态），学习率初期一定不能像以前纯 MLP 那么奔放！**
     # 这里由 1e-3 调小到 5e-4 或 1e-4 是稳妥的做法。
-    learning_rate: 1.0e-4 # Adam 学习率；视觉输入 + 大网络时通常需要更小学习率
+    learning_rate: 5.0e-5 # Adam 学习率；视觉输入 + 大网络时通常需要更小学习率
     learning_rate_scheduler: KLAdaptiveLR # 根据策略 KL 偏移自适应调节学习率
     learning_rate_scheduler_kwargs:
-        kl_threshold: 0.012 # 目标 KL 阈值，策略更新过猛时会自动降低学习率
+        kl_threshold: 0.008 # 目标 KL 阈值，策略更新过猛时会自动降低学习率
     
     # 因为我们现在输入是字典，SKRL的默认预处理器有时会吃瘪。暂设 null 
     state_preprocessor: null # 状态预处理器；dict 观测下先关闭，避免与自定义观测结构冲突
     state_preprocessor_kwargs: null
     
-    # 价值预处理开着是有好处的(稳定 Critic)
-    value_preprocessor: RunningStandardScaler # 对 value 目标做运行时标准化，提升 Critic 训练稳定性
+    # 关闭 value_preprocessor，作为与“保留 RunningStandardScaler”实验的对照组，用于确认它是否是 critic 崩坏主因
+    value_preprocessor: null # 原值: RunningStandardScaler
     value_preprocessor_kwargs: null
 
     random_timesteps: 0 # 前期完全随机动作步数；PPO 通常设 0
@@ -48,18 +48,18 @@ agent:
     clip_predicted_values: True # 是否对价值预测启用裁剪
     
     # 探索系数: 由于机器人要在管道中扭动，初期必须鼓励多加探索，适当提高至 0.01
-    entropy_loss_scale: 0.01 # 熵正则系数；值越大探索越强，但过大可能导致动作发散
+    entropy_loss_scale: 0.0 # 熵正则系数；值越大探索越强，但过大可能导致动作发散
     value_loss_scale: 1.0 # Critic 损失权重；与 policy loss 的相对平衡系数
     kl_threshold: 0.0 # PPO Agent 内部早停 KL 阈值；0.0 代表关闭该机制(由上面的调度器控制)
-    rewards_shaper_scale: 1.0 # 奖励缩放系数；整体放大奖励或缩小奖励的快捷入口
-    time_limit_bootstrap: True # 回合因时间上限截断时是否 bootstrap 下一个状态价值
+    rewards_shaper_scale: 0.5 # 奖励缩放系数；整体放大奖励或缩小奖励的快捷入口
+    time_limit_bootstrap: False # 回合因时间上限截断时是否 bootstrap 下一个状态价值；调试 critic 数值稳定性时先关闭
     
     # logging and checkpoint
     experiment:
         directory: "pipe_robot_vision_ppo" # 日志根目录: logs/skrl/pipe_robot_vision_ppo
         experiment_name: "" # 实验运行名；为空时默认使用短名 ppo_torch (不再自动拼接时间戳)
         write_interval: auto # TensorBoard 写入频率；auto 由 skrl 自动选择
-        checkpoint_interval: auto # checkpoint 保存频率；auto 由 skrl 自动选择
+        checkpoint_interval: 800 # checkpoint 保存频率；原值 auto
 
 
 # Sequential trainer
